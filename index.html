@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>懒得起名小书铺 - 登录</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        /* 登录页面特有样式 */
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--light-color);
+            background-image: linear-gradient(rgba(0,0,0,0.01) 1px, transparent 1px);
+            background-size: 100% 28px;
+        }
+        
+        .login-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+        
+        .login-wrapper {
+            display: flex;
+            width: 100%;
+            max-width: 1000px;
+            background: white;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-hover);
+            min-height: 500px;
+        }
+        
+        .login-left {
+            flex: 1;
+            background: linear-gradient(135deg, #4a6fa5, #6b8cbc);
+            color: white;
+            padding: 50px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .login-left::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><path fill="rgba(255,255,255,0.05)" d="M0,0 L100,0 L100,100 Z" /><path fill="rgba(255,255,255,0.1)" d="M0,0 L0,100 L100,100 Z" /></svg>');
+            background-size: 50px 50px;
+            opacity: 0.3;
+        }
+        
+        .login-right {
+            flex: 1;
+            padding: 50px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        
+        .login-logo {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .login-logo h1 {
+            font-size: 28px;
+            color: white;
+            margin-bottom: 0;
+        }
+        
+        .login-logo .tagline {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+            margin-top: 5px;
+        }
+        
+        .login-left h2 {
+            font-size: 32px;
+            margin-bottom: 20px;
+            color: white;
+        }
+        
+        .login-left p {
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        
+        .login-features {
+            list-style: none;
+            margin-top: 30px;
+        }
+        
+        .login-features li {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .login-features i {
+            margin-right: 10px;
+            color: var(--accent-color);
+            font-size: 18px;
+        }
+        
+        .login-form {
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        
+        .login-form h2 {
+            font-size: 28px;
+            margin-bottom: 30px;
+            color: var(--primary-color);
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text-color);
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            font-size: 16px;
+            transition: var(--transition);
+            font-family: var(--font-body);
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(74, 111, 165, 0.1);
+        }
+        
+        .login-options {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .remember-me {
+            display: flex;
+            align-items: center;
+        }
+        
+        .remember-me input {
+            margin-right: 8px;
+        }
+        
+        .forgot-password {
+            color: var(--primary-color);
+            text-decoration: none;
+            font-size: 14px;
+        }
+        
+        .forgot-password:hover {
+            text-decoration: underline;
+        }
+        
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        
+        .guest-login {
+            background-color: var(--accent-color);
+            color: white;
+        }
+        
+        .guest-login:hover {
+            background-color: #ff7a3d;
+        }
+        
+        .divider {
+            display: flex;
+            align-items: center;
+            margin: 25px 0;
+            color: var(--text-light);
+        }
+        
+        .divider::before, .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background-color: var(--border-color);
+        }
+        
+        .divider span {
+            padding: 0 15px;
+            font-size: 14px;
+        }
+        
+        .register-link {
+            text-align: center;
+            margin-top: 20px;
+            color: var(--text-light);
+            font-size: 15px;
+        }
+        
+        .register-link a {
+            color: var(--primary-color);
+            font-weight: 500;
+            text-decoration: none;
+        }
+        
+        .register-link a:hover {
+            text-decoration: underline;
+        }
+        
+        .login-message {
+            padding: 10px 15px;
+            border-radius: var(--border-radius);
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 14px;
+            display: none;
+        }
+        
+        .login-message.success {
+            background-color: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border: 1px solid rgba(40, 167, 69, 0.2);
+            display: block;
+        }
+        
+        .login-message.error {
+            background-color: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+            border: 1px solid rgba(220, 53, 69, 0.2);
+            display: block;
+        }
+        
+        .login-message.info {
+            background-color: rgba(23, 162, 184, 0.1);
+            color: #17a2b8;
+            border: 1px solid rgba(23, 162, 184, 0.2);
+            display: block;
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .login-wrapper {
+                flex-direction: column;
+                max-width: 500px;
+            }
+            
+            .login-left, .login-right {
+                padding: 40px 30px;
+            }
+            
+            .login-left {
+                padding-bottom: 30px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .login-left, .login-right {
+                padding: 30px 20px;
+            }
+            
+            .login-left h2 {
+                font-size: 26px;
+            }
+            
+            .login-form h2 {
+                font-size: 24px;
+            }
+            
+            .login-options {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body class="login-page">
+    <!-- 头部导航栏 -->
+    <header class="header">
+        <div class="container">
+            <nav class="navbar">
+                <div class="logo">
+                    <h1><i class="fas fa-book-open"></i> 懒得起名小书铺</h1>
+                    <p class="tagline">智能推荐 · 悦读无限</p>
+                </div>
+                
+                <div class="nav-links">
+                    <a href="bookstore.html" class="nav-link"><i class="fas fa-home"></i> 返回首页</a>
+                    <a href="#" class="nav-link active"><i class="fas fa-sign-in-alt"></i> 登录</a>
+                    <a href="register.html" class="nav-link"><i class="fas fa-user-plus"></i> 注册</a>
+                </div>
+                
+                <button class="menu-toggle" id="menu-toggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- 登录主要内容区 -->
+    <main class="login-container">
+        <div class="login-wrapper">
+            <!-- 左侧宣传内容 -->
+            <div class="login-left">
+                <div class="login-logo">
+                    <div>
+                        <h1><i class="fas fa-book-open"></i> 懒得起名小书铺</h1>
+                        <p class="tagline">智能推荐 · 悦读无限</p>
+                    </div>
+                </div>
+                
+                <h2>欢迎回到书的世界</h2>
+                <p>登录您的账户，探索个性化推荐，发现下一本好书。AI智能算法将根据您的阅读历史为您推荐最合适的书籍。</p>
+                
+                <ul class="login-features">
+                    <li><i class="fas fa-check-circle"></i> AI智能图书推荐</li>
+                    <li><i class="fas fa-check-circle"></i> 个性化阅读历史记录</li>
+                    <li><i class="fas fa-check-circle"></i> 安全加密交易</li>
+                    <li><i class="fas fa-check-circle"></i> 跨设备同步书单</li>
+                    <li><i class="fas fa-check-circle"></i> 专属会员优惠</li>
+                </ul>
+            </div>
+            
+            <!-- 右侧登录表单 -->
+            <div class="login-right">
+                <form class="login-form" id="loginForm">
+                    <h2>用户登录</h2>
+                    
+                    <div id="loginMessage" class="login-message"></div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="username">用户名或邮箱</label>
+                        <input type="text" id="username" class="form-control" placeholder="请输入用户名或邮箱" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="password">密码</label>
+                        <input type="password" id="password" class="form-control" placeholder="请输入密码" required>
+                    </div>
+                    
+                    <div class="login-options">
+                        <div class="remember-me">
+                            <input type="checkbox" id="rememberMe">
+                            <label for="rememberMe">记住我</label>
+                        </div>
+                        <a href="reset_password.html" class="forgot-password" id="forgotPassword">忘记密码？</a>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary login-btn">登录</button>
+                    
+                    <div class="divider"><span>或</span></div>
+                    
+                    <button type="button" class="btn guest-login login-btn" id="guestLogin">游客登录</button>
+                    
+                    <div class="register-link">
+                        还没有账户？ <a href="register.html" id="registerLink">立即注册</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="footer text-dark">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3><i class="fas fa-book-open"></i> 懒得起名小书铺</h3>
+                    <p>一个由AI驱动的智能在线书店，致力于为读者提供个性化、便捷的购书体验。</p>
+                    <div class="social-icons">
+                        <a href="#"><i class="fab fa-weixin"></i></a>
+                        <a href="#"><i class="fab fa-weibo"></i></a>
+                        <a href="#"><i class="fab fa-github"></i></a>
+                        <a href="#"><i class="fab fa-twitter"></i></a>
+                    </div>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>快速链接</h4>
+                    <ul>
+                        <li><a href="bookstore.html">首页</a></li>
+                        <li><a href="bookstore.html#books">所有图书</a></li>
+                        <li><a href="bookstore.html#recommendations">智能推荐</a></li>
+                        <li><a href="#">帮助中心</a></li>
+                        <li><a href="#">联系我们</a></li>
+                    </ul>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>用户服务</h4>
+                    <ul>
+                        <li><a href="#">我的账户</a></li>
+                        <li><a href="#">订单查询</a></li>
+                        <li><a href="#">隐私政策</a></li>
+                        <li><a href="#">服务条款</a></li>
+                        <li><a href="#">常见问题</a></li>
+                    </ul>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>项目信息</h4>
+                    <p>CSAI3124课程项目 - 在线智能书店</p>
+                    <p>开发团队：张徐瑞(项目经理)、吴军浩、吴莹莹、张莹莹、卢卓谦</p>
+                    <p>指导老师：[教师姓名]</p>
+                    <p>2025/2026学年</p>
+                </div>
+            </div>
+            
+            <div class="footer-bottom">
+                <p>&copy; 2025-2026 懒得起名小书铺 - 在线智能书店. 保留所有权利. 本网站仅为课程项目演示.</p>
+                <p class="security-info"><i class="fas fa-lock"></i> 本网站采用HTTPS加密传输，符合OWASP安全标准</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+    <script>
+        // Login script with Supabase fallback
+        document.addEventListener('DOMContentLoaded', function() {
+            // Supabase client for this page
+            const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
+            const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
+            const supabaseClient = (typeof supabase !== 'undefined')
+                ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+                : null;
+
+            // DOM元素
+            const loginForm = document.getElementById('loginForm');
+            const loginMessage = document.getElementById('loginMessage');
+            const usernameInput = document.getElementById('username');
+            const passwordInput = document.getElementById('password');
+            const guestLoginBtn = document.getElementById('guestLogin');
+            const forgotPasswordLink = document.getElementById('forgotPassword');
+            const registerLink = document.getElementById('registerLink');
+            const menuToggle = document.getElementById('menu-toggle');
+            const navLinks = document.querySelector('.nav-links');
+
+            // 模拟用户数据（离线回退）
+            const testUsers = [
+                { username: 'demo', password: 'demo123', name: '演示用户' },
+                { username: 'reader', password: 'read2025', name: '阅读爱好者' },
+                { username: 'admin', password: 'admin123', name: '管理员' }
+            ];
+
+            // 显示消息
+            function showMessage(message, type) {
+                loginMessage.textContent = message;
+                loginMessage.className = `login-message ${type}`;
+                loginMessage.style.display = 'block';
+                setTimeout(() => { loginMessage.style.display = 'none'; }, 5000);
+            }
+
+            // 处理登录表单提交（优先使用 Supabase Auth）
+            loginForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const username = usernameInput.value.trim();
+                const password = passwordInput.value.trim();
+                const rememberMe = document.getElementById('rememberMe').checked;
+
+                if (!username || !password) { showMessage('请输入用户名和密码', 'error'); return; }
+
+                // Supabase expects an email for auth; if user entered a username, try to lookup email first
+                if (supabaseClient) {
+                    try {
+                        let emailForSignIn = username;
+
+                        // If input doesn't look like an email, attempt to find the user's email by username
+                        if (!username.includes('@')) {
+                            try {
+                                const { data: userRow, error: fetchErr } = await supabaseClient
+                                    .from('users')
+                                    .select('email')
+                                    .eq('username', username)
+                                    .limit(1)
+                                    .maybeSingle();
+
+                                if (fetchErr) {
+                                    console.warn('Lookup email by username failed:', fetchErr);
+                                } else if (userRow && userRow.email) {
+                                    emailForSignIn = userRow.email;
+                                }
+                            } catch (fetchEx) {
+                                console.warn('Error fetching user email:', fetchEx);
+                            }
+                        }
+
+                        const { data, error } = await supabaseClient.auth.signInWithPassword({ email: emailForSignIn, password });
+                        if (!error && data && (data.user || data.access_token)) {
+                            const displayName = (data.user && data.user.user_metadata && data.user.user_metadata.name) || (data.user && data.user.email) || username;
+                            if (rememberMe) localStorage.setItem('rememberedUser', username);
+                            sessionStorage.setItem('loggedIn', 'true');
+                            sessionStorage.setItem('username', displayName);
+                            sessionStorage.setItem('userType', 'registered');
+                            showMessage(`欢迎回来，${displayName}！正在跳转...`, 'success');
+                            setTimeout(() => { window.location.href = 'bookstore.html'; }, 1200);
+                            return;
+                        }
+                        if (error) console.error('Supabase sign-in error:', error);
+                    } catch (err) {
+                        console.error('Supabase sign-in unexpected error:', err);
+                    }
+                }
+
+                // 回退到本地模拟用户
+                const user = testUsers.find(u => u.username === username && u.password === password);
+                if (user) {
+                    if (rememberMe) localStorage.setItem('rememberedUser', username);
+                    sessionStorage.setItem('loggedIn', 'true');
+                    sessionStorage.setItem('username', user.name);
+                    sessionStorage.setItem('userType', 'registered');
+                    showMessage(`欢迎回来，${user.name}！正在跳转...`, 'success');
+                    setTimeout(() => { window.location.href = 'bookstore.html'; }, 1200);
+                    return;
+                }
+
+                showMessage('用户名或密码错误，请重试', 'error');
+                passwordInput.value = '';
+            });
+
+            // 游客登录
+            guestLoginBtn.addEventListener('click', function() {
+                showMessage('您已使用游客身份登录，部分功能可能受限', 'info');
+                sessionStorage.setItem('loggedIn', 'true');
+                sessionStorage.setItem('username', '游客');
+                sessionStorage.setItem('userType', 'guest');
+                setTimeout(() => { window.location.href = 'bookstore.html'; }, 1500);
+            });
+
+            // 忘记密码：链接跳转到重置页面（由页面锚点处理）
+
+            // 注册链接: 由锚点跳转到 register.html（不再阻止默认）
+
+            // 移动端菜单切换
+            menuToggle.addEventListener('click', function() { navLinks.classList.toggle('active'); });
+
+            // 检查记住的用户
+            const rememberedUser = localStorage.getItem('rememberedUser');
+            if (rememberedUser) { usernameInput.value = rememberedUser; document.getElementById('rememberMe').checked = true; }
+
+            // 如果刚刚注册成功，显示提示并清除标记
+            const registeredEmail = sessionStorage.getItem('registeredEmail');
+            if (registeredEmail) {
+                showMessage(`注册成功：${registeredEmail}。请使用该邮箱登录。`, 'success');
+                sessionStorage.removeItem('registeredEmail');
+            }
+        });
+    </script>
+</body>
+</html>
