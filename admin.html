@@ -3,305 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>懒得起名小书铺 - 管理后台</title>
+    <title>懒得起名小书铺 - 管理门户</title>
     <link rel="stylesheet" href="style.css">
-    <link rel="icon" href="favicon.ico">
-    <script src="https://kit.fontawesome.com/a2b0f6c2b6.js" crossorigin="anonymous"></script>
-    <style>
-        /* 管理后台专属样式增强 */
-        .admin-hero {
-            background: linear-gradient(135deg, var(--primary-color) 10%, var(--secondary-color) 90%);
-            color: white;
-            padding: 60px 0;
-            text-align: center;
-        }
-        .admin-dashboard {
-            padding: 60px 0;
-            background-color: var(--light-color);
-        }
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 30px;
-        }
-        .dashboard-card {
-            background: white;
-            border-radius: var(--border-radius);
-            box-shadow: var(--shadow);
-            padding: 30px;
-            transition: var(--transition);
-        }
-        .dashboard-card:hover {
-            box-shadow: var(--shadow-hover);
-            transform: translateY(-3px);
-        }
-        .dashboard-card h3 {
-            margin-bottom: 10px;
-        }
-        .dashboard-card i {
-            font-size: 32px;
-            margin-bottom: 15px;
-            color: var(--primary-color);
-        }
-        .admin-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 30px;
-        }
-        .admin-table th, .admin-table td {
-            padding: 12px 15px;
-            border-bottom: 1px solid var(--border-color);
-            text-align: left;
-        }
-        .admin-table th {
-            background-color: var(--accent-color);
-            color: white;
-        }
-        .admin-section {
-            margin-top: 60px;
-        }
-        .btn-small {
-            padding: 6px 12px;
-            font-size: 14px;
-            border-radius: 4px;
-        }
-        .btn-warning {
-            background-color: #f0ad4e;
-            color: white;
-        }
-        .btn-danger {
-            background-color: #d9534f;
-            color: white;
-        }
-        .admin-footer {
-            text-align: center;
-            padding: 30px;
-            color: var(--text-light);
-        }
-        @media (max-width: 768px) {
-            .admin-table th, .admin-table td {
-                font-size: 14px;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Header -->
+    <!-- 导航栏（类似bookstore.html，但添加管理链接） -->
     <header class="header">
-        <div class="container navbar">
-            <div class="logo">
-                <h1><i class="fas fa-book"></i> 懒得起名小书铺 · 管理后台</h1>
-                <p class="tagline">后台管理系统</p>
-            </div>
-            <nav class="nav-links">
-                <a href="bookstore.html" class="nav-link"><i class="fas fa-store"></i> 商城首页</a>
-                <a href="#books" class="nav-link"><i class="fas fa-book"></i> 图书管理</a>
-                <a href="#users" class="nav-link"><i class="fas fa-users"></i> 用户管理</a>
-                <a href="#orders" class="nav-link"><i class="fas fa-receipt"></i> 订单管理</a>
-                <a href="#ai" class="nav-link"><i class="fas fa-brain"></i> AI推荐分析</a>
-                <a href="#settings" class="nav-link"><i class="fas fa-cog"></i> 系统设置</a>
-                <a href="index.html" id="logout-btn" class="nav-link"><i class="fas fa-sign-out-alt"></i> 退出登录</a>
+        <div class="container">
+            <nav class="navbar">
+                <div class="logo">
+                    <h1><i class="fas fa-book-open"></i> 懒得起名小书铺 - 管理</h1>
+                </div>
+                <div class="nav-links">
+                    <a href="#products" class="nav-link active"><i class="fas fa-book"></i> 产品管理</a>
+                    <a href="#orders" class="nav-link"><i class="fas fa-shopping-cart"></i> 订单管理</a>
+                    <a href="bookstore.html"><i class="fas fa-store"></i> 返回店面</a>
+                    <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> 退出</a>
+                </div>
             </nav>
         </div>
     </header>
 
-    <!-- Hero -->
-    <section class="admin-hero">
+    <!-- 产品管理区 (A14-A18, C5) -->
+    <section class="admin-section" id="products">
         <div class="container">
-            <h2>欢迎回来，管理员</h2>
-            <p>在这里管理图书、用户、订单与推荐系统</p>
+            <h2>产品管理</h2>
+            <button id="add-product-btn" class="btn btn-primary">添加产品</button>
+            <div class="admin-search-bar">
+                <input type="text" id="admin-search-input" placeholder="搜索产品ID、名称...">
+                <button id="admin-search-btn"><i class="fas fa-search"></i></button>
+            </div>
+            <div class="products-grid" id="admin-products-grid"></div> <!-- 渲染产品列表 -->
         </div>
     </section>
 
-    <!-- Dashboard Overview -->
-    <section class="admin-dashboard container">
-        <h2 class="section-title">控制面板概览</h2>
-        <div class="dashboard-grid">
-            <div class="dashboard-card">
-                <i class="fas fa-book"></i>
-                <h3>图书总数</h3>
-                <p id="books-count">加载中...</p>
-            </div>
-            <div class="dashboard-card">
-                <i class="fas fa-users"></i>
-                <h3>注册用户</h3>
-                <p id="users-count">加载中...</p>
-            </div>
-            <div class="dashboard-card">
-                <i class="fas fa-shopping-cart"></i>
-                <h3>订单总量</h3>
-                <p id="orders-count">加载中...</p>
-            </div>
-            <div class="dashboard-card">
-                <i class="fas fa-brain"></i>
-                <h3>AI推荐利用度</h3>
-                <p id="ai-usage">加载中...</p>
-            </div>
-        </div>
-
-        <!-- Book Management -->
-        <div id="books" class="admin-section">
-            <h2 class="section-title">图书管理</h2>
-            <button class="btn btn-primary">添加新图书</button>
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th>书籍ID</th>
-                        <th>书名</th>
-                        <th>作者</th>
-                        <th>分类</th>
-                        <th>价格</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="books-table-body">
-                    <tr><td colspan="6">正在加载...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- User Management -->
-        <div id="users" class="admin-section">
-            <h2 class="section-title">用户管理</h2>
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th>用户ID</th>
-                        <th>用户名</th>
-                        <th>邮箱</th>
-                        <th>用户类型</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="users-table-body">
-                    <tr><td colspan="5">正在加载...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Order Management -->
-        <div id="orders" class="admin-section">
-            <h2 class="section-title">订单管理</h2>
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th>订单号</th>
-                        <th>用户</th>
-                        <th>书籍</th>
-                        <th>数量</th>
-                        <th>总价</th>
-                        <th>状态</th>
-                    </tr>
-                </thead>
-                <tbody id="orders-table-body">
-                    <tr><td colspan="6">正在加载...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- AI Analytics -->
-        <div id="ai" class="admin-section">
-            <h2 class="section-title">AI 推荐分析</h2>
-            <p>系统将自动读取 Supabase 数据进行统计。以下为示例分析数据：</p>
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th>算法版本</th>
-                        <th>推荐成功率</th>
-                        <th>用户反馈满意度</th>
-                        <th>最新更新时间</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>v2.3 协同过滤</td>
-                        <td>89%</td>
-                        <td>92%</td>
-                        <td>2026-03-01</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Settings -->
-        <div id="settings" class="admin-section">
-            <h2 class="section-title">系统设置</h2>
-            <p>在此可进行账号安全、数据库同步和备份设置。</p>
-            <button class="btn btn-outline">手动同步数据</button>
-            <button class="btn btn-secondary">导出备份</button>
+    <!-- 订单管理区 (A19-A20, B2-B4) -->
+    <section class="admin-section" id="orders">
+        <div class="container">
+            <h2>订单管理</h2>
+            <div class="orders-list" id="admin-orders-list"></div> <!-- 渲染订单 -->
         </div>
     </section>
 
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="footer-bottom">
-            <p>© 2025-2026 懒得起名小书铺 - 管理后台 | 仅供课程项目演示</p>
-            <div class="security-info">
-                <i class="fas fa-lock"></i>
-                <span>本后台系统采用HTTPS加密传输，符合OWASP安全标准</span>
-            </div>
+    <!-- 产品编辑模态 (A16-A17, C5) -->
+    <div class="modal" id="product-modal">
+        <div class="modal-content">
+            <form id="product-form">
+                <input type="text" id="product-title" placeholder="标题">
+                <input type="text" id="product-author" placeholder="作者">
+                <input type="number" id="product-price" placeholder="价格">
+                <textarea id="product-description" placeholder="描述 (支持HTML)"></textarea>
+                <input type="text" id="product-category" placeholder="类别">
+                <input type="number" id="product-rating" placeholder="评级">
+                <input type="text" id="product-tags" placeholder="标签 (逗号分隔)">
+                <div id="photos-upload"> <!-- 多照片上传 (B1) --></div>
+                <button type="submit" class="btn btn-primary">保存</button>
+            </form>
         </div>
-    </footer>
+    </div>
 
-    <script src="script.js"></script>
-    <script>
-        // 模拟数据加载
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('books-count').textContent = '124';
-            document.getElementById('users-count').textContent = '856';
-            document.getElementById('orders-count').textContent = '312';
-            document.getElementById('ai-usage').textContent = '活跃 · 正常运行';
-
-            const books = [
-                {id: 1, title: '时间简史', author: '史蒂芬·霍金', category: 'science', price: 68.00},
-                {id: 2, title: '三体', author: '刘慈欣', category: 'fiction', price: 59.00},
-            ];
-            const users = [
-                {id: 101, username: 'reader123', email: 'reader@example.com', role: '普通用户'},
-                {id: 102, username: 'admin01', email: 'admin@bookstore.com', role: '管理员'},
-            ];
-            const orders = [
-                {id: 'ORD-001', user: 'reader123', book: '三体', qty: 1, price: 59, status: '已完成'},
-            ];
-
-            const bookBody = document.getElementById('books-table-body');
-            bookBody.innerHTML = books.map(b => `
-                <tr>
-                    <td>${b.id}</td>
-                    <td>${b.title}</td>
-                    <td>${b.author}</td>
-                    <td>${b.category}</td>
-                    <td>¥${b.price.toFixed(2)}</td>
-                    <td>
-                        <button class="btn-small btn-warning">编辑</button>
-                        <button class="btn-small btn-danger">删除</button>
-                    </td>
-                </tr>`).join('');
-
-            const userBody = document.getElementById('users-table-body');
-            userBody.innerHTML = users.map(u => `
-                <tr>
-                    <td>${u.id}</td>
-                    <td>${u.username}</td>
-                    <td>${u.email}</td>
-                    <td>${u.role}</td>
-                    <td>
-                        <button class="btn-small btn-warning">修改</button>
-                        <button class="btn-small btn-danger">禁用</button>
-                    </td>
-                </tr>`).join('');
-
-            const orderBody = document.getElementById('orders-table-body');
-            orderBody.innerHTML = orders.map(o => `
-                <tr>
-                    <td>${o.id}</td>
-                    <td>${o.user}</td>
-                    <td>${o.book}</td>
-                    <td>${o.qty}</td>
-                    <td>¥${o.price.toFixed(2)}</td>
-                    <td>${o.status}</td>
-                </tr>`).join('');
-        });
-    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+    <script src="admin-script.js"></script> 
 </body>
 </html>

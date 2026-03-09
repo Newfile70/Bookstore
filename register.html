@@ -439,6 +439,12 @@
                         </div>
                     </div>
                     
+                    <div class="form-group">
+                        <label class="form-label" for="shippingAddress">收货地址 *</label>
+                        <textarea id="shippingAddress" class="form-control" rows="3" 
+                            placeholder="请输入详细收货地址（省/市/区 + 街道门牌）" required></textarea>
+                    </div>
+
                     <div class="form-checkbox">
                         <input type="checkbox" id="agreeTerms" required>
                         <label for="agreeTerms">
@@ -505,7 +511,7 @@
                 <div class="footer-section">
                     <h4>项目信息</h4>
                     <p>CSAI3124课程项目 - 在线智能书店</p>
-                    <p>开发团队：张徐瑞(项目经理)、吴军浩、吴莹莹、张玥冉、卢卓谦</p>
+                    <p>开发团队：张徐瑞(项目经理)、吴军浩、吴莹莹、张莹莹、卢卓谦</p>
                     <p>指导老师：[教师姓名]</p>
                     <p>2025/2026学年</p>
                 </div>
@@ -668,6 +674,7 @@
                 const password = passwordInput.value;
                 const fullName = fullNameInput.value.trim();
                 const subscribeNews = document.getElementById('subscribeNews').checked;
+                const shippingAddress = document.getElementById('shippingAddress').value.trim();
 
                 const submitBtn = registerForm.querySelector('.register-btn');
                 const originalText = submitBtn.textContent;
@@ -688,6 +695,7 @@
                         username: username,
                         email: email,
                         full_name: fullName || null,
+                        shipping_address: shippingAddress || null,
                         subscribe_news: subscribeNews
                     };
 
@@ -746,5 +754,4 @@
         });
     </script>
 </body>
-
 </html>

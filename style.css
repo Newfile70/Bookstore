@@ -1291,4 +1291,8 @@ p { color: var(--text-light); }
     .footer-content {
         grid-template-columns: 1fr;
     }
+
+    .pagination { display: flex; justify-content: center; gap: 10px; margin-top: 20px; }
+    .pagination button { padding: 8px 16px; border: 1px solid var(--border-color); background: white; cursor: pointer; }
+    .pagination button.active { background: var(--primary-color); color: white; }
 }
