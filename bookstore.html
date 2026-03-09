@@ -38,11 +38,12 @@
                     <a href="#home" class="nav-link active"><i class="fas fa-home"></i> 首页</a>
                     <a href="#books" class="nav-link"><i class="fas fa-book"></i> 图书</a>
                     <a href="#recommendations" class="nav-link"><i class="fas fa-star"></i> 智能推荐</a>
+                    <span class="current-user" id="current-user"></span>
                     <div class="dropdown">
                         <a href="#" class="nav-link"><i class="fas fa-user"></i> 我的账户 <i class="fas fa-chevron-down"></i></a>
                         <div class="dropdown-content">
-                            <a href="#"><i class="fas fa-heart"></i> 我的收藏</a>
-                            <a href="#"><i class="fas fa-history"></i> 浏览历史</a>
+                            <a href="#" id="favorites-link"><i class="fas fa-heart"></i> 我的收藏</a>
+                            <a href="#" id="history-link"><i class="fas fa-history"></i> 浏览历史</a>
                             <a href="#"><i class="fas fa-cog"></i> 账户设置</a>
                             <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> 退出登录</a>
                         </div>
@@ -181,7 +182,7 @@
                 </button>
             </div>
             
-            <div class="cart-items">
+            <div class="cart-items" id="cart-items">
                 <!-- 购物车项目将通过JavaScript动态生成 -->
             </div>
             
@@ -194,6 +195,38 @@
                 <button class="btn btn-outline btn-block" id="clear-cart">清空购物车</button>
             </div>
         </aside>
+
+                <!-- 收藏侧边栏 -->
+                <aside class="cart-sidebar" id="favorites-sidebar">
+                    <div class="cart-header">
+                        <h3><i class="fas fa-heart"></i> 我的收藏</h3>
+                        <button class="close-cart" id="close-favorites">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+
+                    <div class="cart-items" id="favorites-items"></div>
+
+                    <div class="cart-footer">
+                        <button class="btn btn-outline btn-block" id="clear-favorites">清空收藏</button>
+                    </div>
+                </aside>
+
+                <!-- 浏览历史侧边栏 -->
+                <aside class="cart-sidebar" id="history-sidebar">
+                    <div class="cart-header">
+                        <h3><i class="fas fa-history"></i> 浏览历史</h3>
+                        <button class="close-cart" id="close-history">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+
+                    <div class="cart-items" id="history-items"></div>
+
+                    <div class="cart-footer">
+                        <button class="btn btn-outline btn-block" id="clear-history">清空历史</button>
+                    </div>
+                </aside>
         
         <!-- 购物车遮罩层 -->
         <div class="cart-overlay" id="cart-overlay"></div>
@@ -252,9 +285,20 @@
         </div>
     </footer>
 
+    <!-- 图书详情模态框 -->
+    <div class="book-modal" id="book-modal" aria-hidden="true">
+        <div class="book-modal-content" role="dialog" aria-modal="true" aria-labelledby="book-modal-title">
+            <button class="book-modal-close" id="book-modal-close" aria-label="关闭">
+                <i class="fas fa-times"></i>
+            </button>
+            <div class="book-modal-body" id="book-modal-body">
+                <!-- 详情内容由脚本注入 -->
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
     <!-- Supabase client (for fetching cloud data) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
 </body>
-
 </html>
