@@ -3,7 +3,6 @@
 document.addEventListener('DOMContentLoaded', async function() {
     let currentPage = 1;
     const pageSize = 12;
-    let detailModal = null;
     // Supabase configuration (替换为你提供的 URL 与 anon key)
     const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
@@ -39,13 +38,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                     category: b.category ?? b.cat ?? 'all',
                     price: parseFloat(b.price) || 0,
                     rating: parseFloat(b.rating) || 0,
-                    description: b.description ?? b.desc ?? b.html_description ?? b.htmlDescription ?? '',
-                    color: b.color ?? '#dacfba',
-                    images: normalizeBookImages(b),
-                    tags: normalizeToArray(b.tags),
-                    publisher: b.publisher ?? b.press ?? '',
-                    isbn: b.isbn ?? '',
-                    stock: Number(b.stock ?? b.inventory ?? 0)
+                    description: b.description ?? b.desc ?? '',
+                    color: b.color ?? '#dacfba'
                 }));
             }
 
@@ -91,352 +85,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             return false;
         }
     }
-
-
-    function escapeHtml(value) {
-        return String(value ?? '').replace(/[&<>"']/g, function(ch) {
-            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
-        });
-    }
-
-    function normalizeTextList(value) {
-        if (Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean);
-        if (typeof value === 'string') {
-            return value.split(/[,，;；|]/).map(v => v.trim()).filter(Boolean);
-        }
-        return [];
-    }
-
-    function normalizeImages(value) {
-        if (Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean);
-        if (typeof value === 'string') {
-            const trimmed = value.trim();
-            if (!trimmed) return [];
-            if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
-                try {
-                    const parsed = JSON.parse(trimmed);
-                    return normalizeImages(parsed);
-                } catch (e) {
-                    // ignore JSON parse failure and fallback to split mode
-                }
-            }
-            return trimmed.split(/[,，;；|\n\r]+/).map(v => v.trim()).filter(Boolean);
-        }
-        return [];
-    }
-
-    function getBookImages(book) {
-        const list = [];
-        if (book && book.coverImage) list.push(String(book.coverImage).trim());
-        if (book && Array.isArray(book.images)) list.push(...book.images);
-        return Array.from(new Set(list.filter(Boolean)));
-    }
-
-    function sanitizeHtmlDescription(value) {
-        const raw = String(value ?? '').trim();
-        if (!raw) return '暂无简介';
-        const temp = document.createElement('div');
-        temp.innerHTML = raw;
-        temp.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(el => el.remove());
-        temp.querySelectorAll('*').forEach(el => {
-            Array.from(el.attributes).forEach(attr => {
-                const name = attr.name.toLowerCase();
-                const val = String(attr.value || '');
-                if (name.startsWith('on')) {
-                    el.removeAttribute(attr.name);
-                }
-                if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(val)) {
-                    el.removeAttribute(attr.name);
-                }
-            });
-        });
-        const cleaned = temp.innerHTML.trim();
-        return cleaned || escapeHtml(raw);
-    }
-
-    function formatBookMetaValue(label, value) {
-        if (value === null || value === undefined || value === '') return '';
-        return '<span><strong>' + escapeHtml(label) + '：</strong>' + escapeHtml(value) + '</span>';
-    }
-
-    function formatDateLabel(value) {
-        if (!value) return '';
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) return String(value);
-        return date.toLocaleDateString('zh-CN');
-    }
-
-    function sanitizeColor(value) {
-        const color = String(value ?? '').trim();
-        if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) return color;
-        if (/^(rgb|rgba|hsl|hsla)\([^\)]+\)$/.test(color)) return color;
-        return '#dacfba';
-    }
-
-    function sameBookId(a, b) {
-        return String(a ?? '') === String(b ?? '');
-    }
-
-    function findBookById(bookId) {
-        return books.find(b => sameBookId(b.id, bookId));
-    }
-
-    function normalizeToArray(value) {
-        if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean);
-        if (typeof value === 'string') {
-            const trimmed = value.trim();
-            if (!trimmed) return [];
-            if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
-                try {
-                    const parsed = JSON.parse(trimmed);
-                    if (Array.isArray(parsed)) return parsed.map(item => String(item).trim()).filter(Boolean);
-                } catch (e) {
-                    // fallback to split mode
-                }
-            }
-            return trimmed.split(/[,，;；|\n\r]+/).map(item => item.trim()).filter(Boolean);
-
-
-        }
-        return [];
-    }
-
-    function normalizeBookImages(book) {
-        if (!book || typeof book !== 'object') return [];
-
-        const candidates = [
-            ...(normalizeToArray(book.images)),
-            ...(normalizeToArray(book.image_urls)),
-            ...(normalizeToArray(book.imageUrls)),
-            ...(normalizeToArray(book.gallery)),
-            ...(normalizeToArray(book.gallery_images)),
-            ...(normalizeToArray(book.galleryImages)),
-            ...(normalizeToArray(book.detail_images)),
-            ...(normalizeToArray(book.detailImages)),
-            ...(normalizeToArray(book.product_images)),
-            ...(normalizeToArray(book.productImages)),
-            book.image,
-            book.image_url,
-            book.imageUrl,
-            book.cover,
-            book.cover_image,
-            book.coverImage,
-            book.cover_url,
-            book.coverUrl,
-            book.thumbnail,
-            book.thumbnail_url,
-            book.thumbnailUrl,
-            book.main_image,
-            book.mainImage,
-            book.banner,
-            book.poster,
-            book.image1,
-            book.image2,
-            book.image3,
-            book.image4,
-            book.image5
-        ].filter(Boolean);
-
-        const unique = [];
-        candidates.forEach(url => {
-            const value = String(url || '').trim();
-            if (value && !unique.includes(value)) unique.push(value);
-        });
-        return unique;
-    }
-
-    function sanitizeBookDescription(value) {
-        const raw = String(value ?? '').trim();
-        if (!raw) return '<p>暂无简介</p>';
-
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = raw;
-
-        wrapper.querySelectorAll('script, style, iframe, object, embed').forEach(el => el.remove());
-        wrapper.querySelectorAll('*').forEach(el => {
-            [...el.attributes].forEach(attr => {
-                const name = attr.name.toLowerCase();
-                const val = String(attr.value || '');
-                if (name.startsWith('on')) {
-                    el.removeAttribute(attr.name);
-                    return;
-                }
-                if ((name === 'href' || name === 'src') && /^javascript:/i.test(val)) {
-                    el.removeAttribute(attr.name);
-                }
-            });
-        });
-
-        const cleaned = wrapper.innerHTML.trim();
-        return cleaned || `<p>${escapeHtml(raw)}</p>`;
-    }
-
-    function ensureBookDetailModal() {
-        let modal = document.getElementById('book-detail-modal');
-        if (modal) return modal;
-
-        modal = document.createElement('div');
-        modal.id = 'book-detail-modal';
-        modal.className = 'book-detail-modal';
-        modal.innerHTML = `
-            <div class="book-detail-backdrop" data-close-detail="true"></div>
-            <div class="book-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
-                <button type="button" class="book-detail-close" id="book-detail-close" aria-label="关闭详情">
-                    <i class="fas fa-times"></i>
-                </button>
-                <div id="book-detail-body"></div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        modal.addEventListener('click', function(event) {
-            if (event.target.dataset.closeDetail === 'true' || event.target.closest('#book-detail-close')) {
-                closeBookDetail();
-            }
-        });
-
-        document.addEventListener('keydown', function(event) {
-            if (event.key === 'Escape' && modal.classList.contains('active')) {
-                closeBookDetail();
-            }
-        });
-
-        return modal;
-    }
-
-    function openBookDetail(bookId) {
-        const book = findBookById(bookId);
-        if (!book) {
-            showNotification('未找到该商品详情', 'info');
-            return;
-        }
-
-        const modal = ensureBookDetailModal();
-        const body = modal.querySelector('#book-detail-body');
-        const safeTitle = escapeHtml(book.title || '未命名图书');
-        const safeAuthor = escapeHtml(book.author || '未知作者');
-        const safeCategory = escapeHtml(getCategoryName(book.category));
-        const safePublisher = escapeHtml(book.publisher || book.press || '暂无');
-        const safeIsbn = escapeHtml(book.isbn || book.ISBN || '暂无');
-        const tags = normalizeToArray(book.tags);
-        const images = normalizeBookImages(book);
-        const descriptionHtml = sanitizeBookDescription(book.description || book.html_description || book.htmlDescription || '');
-        const displayColor = sanitizeColor(book.color);
-        const relatedBooks = books
-            .filter(item => !sameBookId(item.id, book.id) && (item.category === book.category || item.author === book.author))
-            .slice(0, 3);
-
-        const galleryHtml = images.length > 0
-            ? `
-                <div class="book-detail-gallery">
-                    <div class="book-detail-main-image"><img src="${escapeHtml(images[0])}" alt="${safeTitle}" loading="lazy"></div>
-                    ${images.length > 1 ? `<div class="book-detail-thumbs">${images.map((url, index) => `<button type="button" class="book-detail-thumb ${index === 0 ? 'active' : ''}" data-image="${escapeHtml(url)}"><img src="${escapeHtml(url)}" alt="${safeTitle} ${index + 1}" loading="lazy"></button>`).join('')}</div>` : ''}
-                </div>
-            `
-            : `
-                <div class="book-detail-cover" style="background-color: ${displayColor};">
-                    <span>${escapeHtml((book.title || '').substring(0, 18) || '图书')}</span>
-                </div>
-            `;
-
-        body.innerHTML = `
-            <div class="book-detail-layout">
-                ${galleryHtml}
-                <div class="book-detail-content">
-                    <div class="book-detail-category">${safeCategory}</div>
-                    <h3 id="book-detail-title" class="book-detail-title">${safeTitle}</h3>
-                    <p class="book-detail-author">作者：${safeAuthor}</p>
-                    <div class="book-detail-meta">
-                        <span><i class="fas fa-star"></i> ${Number(book.rating || 0).toFixed(1)}</span>
-                        <span>价格：¥ ${Number(book.price || 0).toFixed(2)}</span>
-                        <span>库存：${Number(book.stock || 0)}</span>
-                    </div>
-                    <div class="book-detail-extra">
-                        <p>出版社：${safePublisher}</p>
-                        <p>ISBN：${safeIsbn}</p>
-                    </div>
-                    ${tags.length ? `<div class="book-detail-tags">${tags.map(tag => `<span class="book-detail-tag">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
-                    <div class="book-detail-description">${descriptionHtml}</div>
-                    <div class="book-detail-actions">
-                        <button class="btn btn-primary detail-add-to-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(book.id)}" ${isGuestUser() ? 'disabled' : ''}>
-                            <i class="fas fa-cart-plus"></i> 加入购物车
-                        </button>
-                    </div>
-                    ${relatedBooks.length ? `<div class="book-detail-related"><h4>相关商品</h4><div class="book-detail-related-list">${relatedBooks.map(item => `<button type="button" class="book-detail-related-item" data-related-id="${escapeHtml(item.id)}">${escapeHtml(item.title)}</button>`).join('')}</div></div>` : ''}
-                </div>
-            </div>
-        `;
-
-        const mainDetailImage = body.querySelector('.book-detail-main-image img');
-        if (mainDetailImage) {
-            mainDetailImage.addEventListener('error', function() {
-                const cover = body.querySelector('.book-detail-gallery');
-                if (cover) {
-                    cover.outerHTML = `<div class="book-detail-cover" style="background-color: ${displayColor};"><span>${escapeHtml((book.title || '').substring(0, 18) || '图书')}</span></div>`;
-                }
-            }, { once: true });
-        }
-
-        body.querySelectorAll('.book-detail-thumb').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const target = body.querySelector('.book-detail-main-image img');
-                if (target && this.dataset.image) {
-                    target.src = this.dataset.image;
-                    target.alt = `${book.title || '图书'} 缩略图`;
-                }
-                body.querySelectorAll('.book-detail-thumb').forEach(node => node.classList.remove('active'));
-                this.classList.add('active');
-            });
-        });
-
-        body.querySelectorAll('[data-related-id]').forEach(btn => {
-            btn.addEventListener('click', function() {
-                openBookDetail(this.dataset.relatedId);
-            });
-        });
-
-        const addBtn = body.querySelector('.detail-add-to-cart');
-        if (addBtn) {
-            addBtn.addEventListener('click', function() {
-                if (isGuestUser()) {
-                    showNotification('游客无法使用购物车，请登录后操作', 'info');
-                    return;
-                }
-                addToCart(book.id);
-            });
-        }
-
-        modal.classList.add('active');
-        document.body.style.overflow = 'hidden';
-    }
-
-    function closeBookDetail() {
-        const modal = document.getElementById('book-detail-modal');
-        if (!modal) return;
-        modal.classList.remove('active');
-        if (!cartSidebar || !cartSidebar.classList.contains('active')) {
-            document.body.style.overflow = 'auto';
-        }
-    }
-
-    function bindBookDetailTriggers(scope) {
-        if (!scope) return;
-        scope.querySelectorAll('.book-card, .recommendation-card').forEach(card => {
-            card.addEventListener('click', function(event) {
-                if (event.target.closest('.add-to-cart')) return;
-                const bookId = this.dataset.id;
-                if (bookId) openBookDetail(bookId);
-            });
-        });
-
-        scope.querySelectorAll('.cart-item-image, .cart-item-title').forEach(trigger => {
-            trigger.addEventListener('click', function() {
-                const holder = this.closest('.cart-item');
-                const bookId = holder && holder.dataset.bookId;
-                if (bookId) openBookDetail(bookId);
-            });
-        });
-    }
     
     // 初始化页面
     function initPage() {
@@ -455,17 +103,17 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // 渲染图书列表
     function renderBooks(booksToRender) {
+        if (!booksGrid) return;
         booksGrid.innerHTML = '';
 
         const filteredBooks = currentFilter === 'all'
             ? booksToRender
             : booksToRender.filter(book => book.category === currentFilter);
 
-        const pagination = document.querySelector('.pagination');
-        if (pagination) pagination.innerHTML = '';
-
         if (filteredBooks.length === 0) {
             booksGrid.innerHTML = '<div class="no-results"><p>未找到相关图书</p></div>';
+            const oldPagination = document.querySelector('.pagination');
+            if (oldPagination) oldPagination.innerHTML = '';
             return;
         }
 
@@ -481,19 +129,19 @@ document.addEventListener('DOMContentLoaded', async function() {
             bookCard.dataset.category = book.category;
 
             bookCard.innerHTML = `
-                <div class="book-image" style="background-color: ${book.color}">
-                    <span style="color: white; font-weight: 500;">${book.title.substring(0, 10)}...</span>
+                <div class="book-image" style="background-color: ${sanitizeColor(book.color)}">
+                    <span style="color: white; font-weight: 500;">${escapeHtml((book.title || '').substring(0, 10))}${(book.title || '').length > 10 ? '...' : ''}</span>
                 </div>
                 <div class="book-content">
-                    <div class="book-category">${getCategoryName(book.category)}</div>
-                    <h3 class="book-title">${book.title}</h3>
-                    <p class="book-author">${book.author}</p>
-                    <p class="book-description">${book.description}</p>
+                    <div class="book-category">${escapeHtml(getCategoryName(book.category))}</div>
+                    <h3 class="book-title">${escapeHtml(book.title || '未命名图书')}</h3>
+                    <p class="book-author">${escapeHtml(book.author || '未知作者')}</p>
+                    <p class="book-description">${escapeHtml(String(book.description || '').replace(/<[^>]+>/g, '').slice(0, 80) || '暂无简介')}</p>
                     <div class="book-footer">
-                        <div class="book-price">¥ ${book.price.toFixed(2)}</div>
+                        <div class="book-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
                         <div class="book-rating">
                             <i class="fas fa-star"></i>
-                            <span>${book.rating}</span>
+                            <span>${Number(book.rating || 0).toFixed(1)}</span>
                         </div>
                         <button class="add-to-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${book.id}" ${isGuestUser() ? 'disabled' : ''}>
                             <i class="fas fa-cart-plus"></i>
@@ -505,7 +153,14 @@ document.addEventListener('DOMContentLoaded', async function() {
             booksGrid.appendChild(bookCard);
         });
 
-        if (pagination && totalPages > 1) {
+        let pagination = document.querySelector('.pagination');
+        if (!pagination) {
+            pagination = document.createElement('div');
+            pagination.className = 'pagination';
+            booksGrid.after(pagination);
+        }
+        pagination.innerHTML = '';
+        if (totalPages > 1) {
             for (let i = 1; i <= totalPages; i++) {
                 const btn = document.createElement('button');
                 btn.type = 'button';
@@ -519,19 +174,22 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
 
-        document.querySelectorAll('.books-grid .add-to-cart').forEach(btn => {
+        // 为添加到购物车按钮添加事件监听器（游客会被阻止并提示登录）
+        document.querySelectorAll('.add-to-cart').forEach(btn => {
             btn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 if (isGuestUser()) {
                     showNotification('游客无法使用购物车，请登录后操作', 'info');
                     return;
                 }
-                const bookId = this.dataset.id;
+                const bookId = Number(this.dataset.id);
                 addToCart(bookId);
             });
         });
 
         bindBookDetailTriggers(booksGrid);
+
+        // 确保UI状态（disabled类/属性）与当前用户状态一致
         applyGuestUIRestrictions();
     }
 
@@ -540,14 +198,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         recommendationsGrid.innerHTML = '';
         
         recommendations.forEach(rec => {
-            const book = findBookById(rec.bookId);
+            const book = books.find(b => b.id === rec.bookId);
             if (!book) return;
             
             const recommendationCard = document.createElement('div');
             recommendationCard.className = 'recommendation-card';
             recommendationCard.dataset.id = book.id;
             
-            recommendationCard.dataset.id = book.id;
             recommendationCard.innerHTML = `
                 <div class="recommendation-badge">AI推荐</div>
                 <p class="recommendation-reason"><i class="fas fa-lightbulb"></i> ${rec.reason}</p>
@@ -572,18 +229,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         // 为推荐区域添加到购物车按钮添加事件监听器（游客会被阻止并提示登录）
         document.querySelectorAll('.recommendation-card .add-to-cart').forEach(btn => {
-            btn.addEventListener('click', function(e) {
-                e.stopPropagation();
+            btn.addEventListener('click', function() {
                 if (isGuestUser()) {
                     showNotification('游客无法使用购物车，请登录后操作', 'info');
                     return;
                 }
-                const bookId = this.dataset.id;
+                const bookId = parseInt(this.dataset.id);
                 addToCart(bookId);
             });
         });
 
         bindBookDetailTriggers(recommendationsGrid);
+
+        // 确保UI状态（disabled类/属性）与当前用户状态一致
         applyGuestUIRestrictions();
     }
     
@@ -597,21 +255,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         
         cart.forEach(item => {
-            const book = findBookById(item.bookId);
+            const book = books.find(b => b.id === item.bookId);
             if (!book) return;
             
             const cartItem = document.createElement('div');
             cartItem.className = 'cart-item';
             cartItem.dataset.id = item.id;
-            cartItem.dataset.bookId = item.bookId;
-            cartItem.dataset.bookId = book.id;
             
             cartItem.innerHTML = `
-                <div class="cart-item-image" style="background-color: ${book.color}; cursor: pointer;">
+                <div class="cart-item-image" style="background-color: ${book.color}">
                     <span style="color: white; font-size: 12px; padding: 5px;">${book.title.substring(0, 6)}...</span>
                 </div>
                 <div class="cart-item-details">
-                    <h4 class="cart-item-title" style="cursor: pointer;">${book.title}</h4>
+                    <h4 class="cart-item-title">${book.title}</h4>
                     <p class="cart-item-author">${book.author}</p>
                     <div class="cart-item-controls">
                         <div class="cart-item-quantity">
@@ -651,15 +307,13 @@ document.addEventListener('DOMContentLoaded', async function() {
                 removeFromCart(itemId);
             });
         });
-
-        bindBookDetailTriggers(cartItemsContainer);
     }
     
     // 添加事件监听器
     function setupEventListeners() {
         // 搜索功能
-        searchBtn.addEventListener('click', performSearch);
-        searchInput.addEventListener('keypress', function(e) {
+        if (searchBtn) searchBtn.addEventListener('click', performSearch);
+        if (searchInput) searchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
         
@@ -672,7 +326,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
         
         // 移动端菜单切换
-        menuToggle.addEventListener('click', function() {
+        if (menuToggle) menuToggle.addEventListener('click', function() {
             navLinks.classList.toggle('active');
         });
         
@@ -687,7 +341,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
         
         // 刷新推荐
-        refreshRecommendationsBtn.addEventListener('click', function() {
+        if (refreshRecommendationsBtn) refreshRecommendationsBtn.addEventListener('click', function() {
             this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中...';
             this.disabled = true;
             
@@ -703,18 +357,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
         
         // 购物车功能
-        cartIcon.addEventListener('click', function() {
+        if (cartIcon) cartIcon.addEventListener('click', function() {
             if (isGuestUser()) {
                 showNotification('游客无法访问购物车，请登录后使用此功能', 'info');
                 return;
             }
             openCart();
         });
-        closeCartBtn.addEventListener('click', closeCart);
-        cartOverlay.addEventListener('click', closeCart);
+        if (closeCartBtn) closeCartBtn.addEventListener('click', closeCart);
+        if (cartOverlay) cartOverlay.addEventListener('click', closeCart);
         
         // 清空购物车
-        clearCartBtn.addEventListener('click', function() {
+        if (clearCartBtn) clearCartBtn.addEventListener('click', function() {
             if (isGuestUser()) {
                 showNotification('游客无法操作购物车，请登录后使用', 'info');
                 return;
@@ -792,23 +446,160 @@ if (checkoutBtn) {
 }
     }
     
-    // 搜索功能
-    function performSearch() {
-        const query = searchInput.value.trim().toLowerCase();
-        
-        if (query === '') {
-            renderBooks(books);
+    function ensureSearchResultsSection() {
+        let section = document.getElementById('search-results-section');
+        if (section) return section;
+
+        const booksSection = document.getElementById('books');
+        if (!booksSection || !booksSection.parentNode) return null;
+
+        section = document.createElement('section');
+        section.id = 'search-results-section';
+        section.className = 'books-section paper-section';
+        section.style.display = 'none';
+        section.innerHTML = `
+            <div class="container">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">搜索结果</h2>
+                        <p class="section-subtitle" id="search-results-summary"> </p>
+                    </div>
+                    <button type="button" class="btn btn-outline" id="clear-search-results">清除搜索</button>
+                </div>
+                <div class="books-grid search-results-grid"></div>
+            </div>
+        `;
+
+        booksSection.parentNode.insertBefore(section, booksSection);
+
+        section.querySelector('#clear-search-results')?.addEventListener('click', function() {
+            searchInput.value = '';
+            clearSearchResults();
+        });
+
+        return section;
+    }
+
+    function renderSearchResults(resultBooks, rawQuery) {
+        const section = ensureSearchResultsSection();
+        if (!section) return;
+
+        const grid = section.querySelector('.search-results-grid');
+        const summary = section.querySelector('#search-results-summary');
+        if (!grid || !summary) return;
+
+        const safeQuery = escapeHtml(rawQuery);
+        section.style.display = 'block';
+        grid.innerHTML = '';
+        summary.innerHTML = `关键词“${safeQuery}”共找到 ${resultBooks.length} 本图书。热门图书区域保留在下方，搜索结果与热门展示已分开。`;
+
+        if (!resultBooks.length) {
+            grid.innerHTML = '<div class="no-results"><p>没有找到相关图书，请尝试更换关键词。</p></div>';
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
             return;
         }
-        
-        const filteredBooks = books.filter(book => 
-            book.title.toLowerCase().includes(query) || 
-            book.author.toLowerCase().includes(query) ||
-            book.description.toLowerCase().includes(query)
-        );
-        
-        renderBooks(filteredBooks);
-        showNotification(`找到 ${filteredBooks.length} 本相关图书`, 'info');
+
+        resultBooks.forEach(book => {
+            const bookCard = document.createElement('div');
+            bookCard.className = 'book-card';
+            bookCard.dataset.id = book.id;
+            bookCard.dataset.category = book.category;
+
+            bookCard.innerHTML = `
+                <div class="book-image" style="background-color: ${sanitizeColor(book.color)}">
+                    <span style="color: white; font-weight: 500;">${escapeHtml((book.title || '图书').substring(0, 10))}${(book.title || '').length > 10 ? '...' : ''}</span>
+                </div>
+                <div class="book-content">
+                    <div class="book-category">${escapeHtml(getCategoryName(book.category))}</div>
+                    <h3 class="book-title">${escapeHtml(book.title || '未命名图书')}</h3>
+                    <p class="book-author">${escapeHtml(book.author || '未知作者')}</p>
+                    <p class="book-description">${escapeHtml(String(book.description || '').replace(/<[^>]+>/g, '').slice(0, 80) || '暂无简介')}</p>
+                    <div class="book-footer">
+                        <div class="book-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
+                        <div class="book-rating">
+                            <i class="fas fa-star"></i>
+                            <span>${Number(book.rating || 0).toFixed(1)}</span>
+                        </div>
+                        <button class="add-to-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(book.id)}" ${isGuestUser() ? 'disabled' : ''}>
+                            <i class="fas fa-cart-plus"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            grid.appendChild(bookCard);
+        });
+
+        grid.querySelectorAll('.add-to-cart').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (isGuestUser()) {
+                    showNotification('游客无法使用购物车，请登录后操作', 'info');
+                    return;
+                }
+                const bookId = Number(this.dataset.id);
+                addToCart(bookId);
+            });
+        });
+
+        bindBookDetailTriggers(grid);
+        applyGuestUIRestrictions();
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function clearSearchResults() {
+        const section = document.getElementById('search-results-section');
+        if (section) {
+            section.style.display = 'none';
+            const grid = section.querySelector('.search-results-grid');
+            const summary = section.querySelector('#search-results-summary');
+            if (grid) grid.innerHTML = '';
+            if (summary) summary.textContent = '';
+        }
+        currentPage = 1;
+        renderBooks(books);
+    }
+
+    // 搜索功能
+    function performSearch() {
+        const rawQuery = searchInput.value.trim();
+        const query = rawQuery.toLowerCase();
+
+        if (query === '') {
+            clearSearchResults();
+            showNotification('已清除搜索结果，下面仍显示热门图书', 'info');
+            return;
+        }
+
+        const keywords = query.split(/\s+/).filter(Boolean);
+        const scoredBooks = books.map(book => {
+            const fields = [
+                book.title,
+                book.author,
+                book.description,
+                getCategoryName(book.category),
+                ...(normalizeTextList(book.tags)),
+                book.publisher,
+                book.isbn
+            ].map(value => String(value || '').toLowerCase());
+
+            let score = 0;
+            keywords.forEach(word => {
+                fields.forEach(field => {
+                    if (!field) return;
+                    if (field === word) score += 8;
+                    else if (field.startsWith(word)) score += 5;
+                    else if (field.includes(word)) score += 3;
+                });
+            });
+
+            return { book, score };
+        }).filter(item => item.score > 0)
+          .sort((a, b) => b.score - a.score || Number(b.book.rating || 0) - Number(a.book.rating || 0) || Number(a.book.price || 0) - Number(b.book.price || 0));
+
+        const filteredBooks = scoredBooks.map(item => item.book);
+        renderSearchResults(filteredBooks, rawQuery);
+        showNotification(`搜索完成：找到 ${filteredBooks.length} 本相关图书，热门图书展示保持不变`, 'info');
     }
     
     // 添加到购物车
@@ -817,11 +608,11 @@ if (checkoutBtn) {
             showNotification('游客无法使用购物车，请登录后操作', 'info');
             return;
         }
-        const book = findBookById(bookId);
+        const book = books.find(b => b.id === bookId);
         if (!book) return;
         
         // 检查是否已在购物车中
-        const existingItem = cart.find(item => sameBookId(item.bookId, bookId));
+        const existingItem = cart.find(item => item.bookId === bookId);
         
         if (existingItem) {
             existingItem.quantity += 1;
@@ -872,7 +663,7 @@ if (checkoutBtn) {
         const itemIndex = cart.findIndex(i => i.id === itemId);
         if (itemIndex === -1) return;
         
-        const book = findBookById(cart[itemIndex].bookId);
+        const book = books.find(b => b.id === cart[itemIndex].bookId);
         cart.splice(itemIndex, 1);
         
         renderCart();
@@ -894,7 +685,7 @@ if (checkoutBtn) {
     // 计算购物车总价
     function calculateTotal() {
         const total = cart.reduce((sum, item) => {
-            const book = findBookById(item.bookId);
+            const book = books.find(b => b.id === item.bookId);
             return sum + (book ? book.price * item.quantity : 0);
         }, 0);
         
@@ -914,6 +705,7 @@ if (checkoutBtn) {
         cartOverlay.classList.remove('active');
         document.body.style.overflow = 'auto';
     }
+    
     // 显示通知
     function showNotification(message, type) {
         // 移除现有通知
@@ -971,6 +763,385 @@ if (checkoutBtn) {
         return names[category] || category;
     }
     
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    function sanitizeColor(value) {
+        const color = String(value || '').trim();
+        if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) return color;
+        return '#dacfba';
+    }
+
+    function normalizeTextList(value) {
+        if (Array.isArray(value)) return value.filter(Boolean).map(v => String(v));
+        if (typeof value !== 'string') return [];
+        const trimmed = value.trim();
+        if (!trimmed) return [];
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) return parsed.filter(Boolean).map(v => String(v));
+        } catch (e) {
+            // ignore JSON parse failure and continue with split logic
+        }
+        return trimmed.split(/[;,，、|/]+/).map(v => v.trim()).filter(Boolean);
+    }
+
+    function ensureBookDetailModal() {
+        let modal = document.getElementById('book-detail-modal');
+        if (modal) return modal;
+
+        modal = document.createElement('div');
+        modal.id = 'book-detail-modal';
+        modal.className = 'book-detail-modal';
+        modal.innerHTML = `
+            <div class="book-detail-overlay" data-role="close-detail"></div>
+            <div class="book-detail-panel" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
+                <button type="button" class="book-detail-close" data-role="close-detail" aria-label="关闭详情页">
+                    <i class="fas fa-times"></i>
+                </button>
+                <div class="book-detail-body"></div>
+            </div>
+        `;
+
+        modal.addEventListener('click', function(e) {
+            if (e.target.closest('[data-role="close-detail"]')) {
+                closeBookDetail();
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modal.classList.contains('active')) {
+                closeBookDetail();
+            }
+        });
+
+        document.body.appendChild(modal);
+        return modal;
+    }
+
+    function getBookMetaRows(book) {
+        const rows = [
+            { label: '图书分类', value: getCategoryName(book.category) },
+            { label: '作者', value: book.author || '未知作者' },
+            { label: '评分', value: `${Number(book.rating || 0).toFixed(1)} / 5.0` },
+            { label: '价格', value: `¥ ${Number(book.price || 0).toFixed(2)}` }
+        ];
+
+        if (book.publisher) rows.push({ label: '出版社', value: book.publisher });
+        if (book.isbn) rows.push({ label: 'ISBN', value: book.isbn });
+        const tags = normalizeTextList(book.tags);
+        if (tags.length) rows.push({ label: '标签', value: tags.join(' / ') });
+
+        return rows;
+    }
+
+    function openBookDetail(bookId) {
+        const book = books.find(b => Number(b.id) === Number(bookId));
+        if (!book) {
+            showNotification('未找到该图书详情', 'info');
+            return;
+        }
+
+        const modal = ensureBookDetailModal();
+        const body = modal.querySelector('.book-detail-body');
+        if (!body) return;
+
+        const tags = normalizeTextList(book.tags);
+        const metaRows = getBookMetaRows(book).map(item => `
+            <div class="book-detail-meta-item">
+                <span class="book-detail-meta-label">${escapeHtml(item.label)}</span>
+                <strong class="book-detail-meta-value">${escapeHtml(item.value)}</strong>
+            </div>
+        `).join('');
+
+        body.innerHTML = `
+            <div class="book-detail-hero">
+                <div class="book-detail-cover" style="background-color: ${sanitizeColor(book.color)}">
+                    <span>${escapeHtml(book.title || '图书')}</span>
+                </div>
+                <div class="book-detail-summary">
+                    <div class="book-detail-category">${escapeHtml(getCategoryName(book.category))}</div>
+                    <h2 id="book-detail-title" class="book-detail-title">${escapeHtml(book.title || '未命名图书')}</h2>
+                    <p class="book-detail-author">作者：${escapeHtml(book.author || '未知作者')}</p>
+                    <div class="book-detail-rating-row">
+                        <span class="book-detail-price">¥ ${Number(book.price || 0).toFixed(2)}</span>
+                        <span class="book-detail-rating"><i class="fas fa-star"></i> ${Number(book.rating || 0).toFixed(1)}</span>
+                    </div>
+                    <p class="book-detail-description">${escapeHtml(String(book.description || '暂无简介').replace(/<[^>]+>/g, ''))}</p>
+                    <div class="book-detail-actions">
+                        <button class="btn btn-primary detail-add-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${book.id}" ${isGuestUser() ? 'disabled' : ''}>
+                            <i class="fas fa-cart-plus"></i> 加入购物车
+                        </button>
+                        <button class="btn btn-outline" type="button" data-role="close-detail">继续逛逛</button>
+                    </div>
+                </div>
+            </div>
+            <div class="book-detail-section">
+                <h3>图书信息</h3>
+                <div class="book-detail-meta-grid">${metaRows}</div>
+            </div>
+            <div class="book-detail-section">
+                <h3>内容亮点</h3>
+                <ul class="book-detail-highlights">
+                    <li>适合喜欢「${escapeHtml(getCategoryName(book.category))}」内容的读者。</li>
+                    <li>当前读者评分为 ${Number(book.rating || 0).toFixed(1)}，具有较高参考价值。</li>
+                    <li>页面支持直接加入购物车，无需返回列表页。</li>
+                </ul>
+            </div>
+            ${tags.length ? `
+            <div class="book-detail-section">
+                <h3>关键词</h3>
+                <div class="book-detail-tags">${tags.map(tag => `<span class="book-detail-tag">${escapeHtml(tag)}</span>`).join('')}</div>
+            </div>` : ''}
+        `;
+
+        body.querySelector('.detail-add-cart')?.addEventListener('click', function() {
+            if (isGuestUser()) {
+                showNotification('游客无法使用购物车，请登录后操作', 'info');
+                return;
+            }
+            addToCart(Number(this.dataset.id));
+        });
+
+        modal.classList.add('active');
+        document.body.classList.add('detail-open');
+    }
+
+    function closeBookDetail() {
+        const modal = document.getElementById('book-detail-modal');
+        if (!modal) return;
+        modal.classList.remove('active');
+        document.body.classList.remove('detail-open');
+    }
+
+    function bindBookDetailTriggers(scope) {
+        if (!scope) return;
+        scope.querySelectorAll('.book-card, .recommendation-card').forEach(card => {
+            if (card.dataset.detailBound === '1') return;
+            card.dataset.detailBound = '1';
+            card.style.cursor = 'pointer';
+            card.addEventListener('click', function(e) {
+                if (e.target.closest('.add-to-cart')) return;
+                const trigger = this.closest('[data-id]') || this;
+                const bookId = Number(trigger.dataset.id || this.dataset.id);
+                if (!bookId) return;
+                openBookDetail(bookId);
+            });
+        });
+    }
+
+    const searchSectionStyle = document.createElement('style');
+    searchSectionStyle.textContent = `
+        #search-results-section .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        #search-results-section .section-subtitle {
+            margin-top: 8px;
+        }
+    `;
+    document.head.appendChild(searchSectionStyle);
+
+    const bookDetailStyle = document.createElement('style');
+    bookDetailStyle.textContent = `
+        body.detail-open {
+            overflow: hidden;
+        }
+
+        .book-detail-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 3000;
+            display: none;
+        }
+
+        .book-detail-modal.active {
+            display: block;
+        }
+
+        .book-detail-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(2px);
+        }
+
+        .book-detail-panel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(960px, calc(100% - 32px));
+            max-height: calc(100vh - 48px);
+            overflow-y: auto;
+            background: #fffdf8;
+            border-radius: 24px;
+            box-shadow: 0 24px 80px rgba(15, 23, 42, 0.18);
+            padding: 32px;
+        }
+
+        .book-detail-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(15, 23, 42, 0.06);
+            cursor: pointer;
+        }
+
+        .book-detail-hero {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 28px;
+            align-items: start;
+        }
+
+        .book-detail-cover {
+            min-height: 360px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            color: #fff;
+            font-size: 28px;
+            font-weight: 700;
+            text-align: center;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15);
+        }
+
+        .book-detail-category {
+            display: inline-flex;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(160, 116, 74, 0.12);
+            color: #8c5a30;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .book-detail-title {
+            margin: 0 0 12px;
+            font-size: 32px;
+            line-height: 1.2;
+        }
+
+        .book-detail-author,
+        .book-detail-description {
+            color: #4b5563;
+            line-height: 1.8;
+        }
+
+        .book-detail-rating-row,
+        .book-detail-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin: 16px 0;
+        }
+
+        .book-detail-price {
+            font-size: 28px;
+            font-weight: 700;
+            color: #8c5a30;
+        }
+
+        .book-detail-rating {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(250, 204, 21, 0.16);
+        }
+
+        .book-detail-section {
+            margin-top: 28px;
+            padding-top: 24px;
+            border-top: 1px solid rgba(15, 23, 42, 0.08);
+        }
+
+        .book-detail-section h3 {
+            margin-bottom: 16px;
+        }
+
+        .book-detail-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .book-detail-meta-item {
+            padding: 16px;
+            background: #fff;
+            border-radius: 16px;
+            border: 1px solid rgba(15, 23, 42, 0.06);
+        }
+
+        .book-detail-meta-label {
+            display: block;
+            color: #6b7280;
+            margin-bottom: 6px;
+            font-size: 14px;
+        }
+
+        .book-detail-highlights {
+            margin: 0;
+            padding-left: 18px;
+            color: #4b5563;
+            line-height: 1.8;
+        }
+
+        .book-detail-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .book-detail-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: rgba(140, 90, 48, 0.1);
+            color: #8c5a30;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .book-detail-panel {
+                width: calc(100% - 20px);
+                padding: 24px 18px;
+                max-height: calc(100vh - 20px);
+            }
+
+            .book-detail-hero,
+            .book-detail-meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .book-detail-cover {
+                min-height: 220px;
+                font-size: 24px;
+            }
+
+            .book-detail-title {
+                font-size: 26px;
+            }
+        }
+    `;
+    document.head.appendChild(bookDetailStyle);
+
     // 添加通知样式
     const notificationStyle = document.createElement('style');
     notificationStyle.textContent = `
@@ -1014,287 +1185,6 @@ if (checkoutBtn) {
             font-size: 14px;
         }
         
-        .book-detail-modal {
-            position: fixed;
-            inset: 0;
-            display: none;
-            z-index: 2100;
-        }
-
-        .book-detail-modal.active {
-            display: block;
-        }
-
-        .book-detail-backdrop {
-            position: absolute;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.55);
-        }
-
-        .book-detail-dialog {
-            position: relative;
-            width: min(760px, calc(100% - 32px));
-            max-height: calc(100vh - 40px);
-            overflow: auto;
-            margin: 20px auto;
-            background: #fff;
-            border-radius: var(--border-radius);
-            box-shadow: var(--shadow-hover);
-            padding: 24px;
-            z-index: 1;
-        }
-
-        .book-detail-close {
-            position: absolute;
-            top: 12px;
-            right: 12px;
-            width: 36px;
-            height: 36px;
-            border: none;
-            border-radius: 50%;
-            background: rgba(0, 0, 0, 0.06);
-            cursor: pointer;
-        }
-
-        .book-detail-layout {
-            display: grid;
-            grid-template-columns: 220px 1fr;
-            gap: 24px;
-            align-items: start;
-        }
-
-        .book-detail-media {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .book-detail-cover {
-            min-height: 300px;
-            border-radius: var(--border-radius);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            padding: 20px;
-            color: #fff;
-            font-size: 24px;
-            font-weight: 600;
-            line-height: 1.5;
-            overflow: hidden;
-        }
-
-        .book-detail-cover img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            border-radius: inherit;
-            display: block;
-        }
-
-        .book-detail-gallery {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
-            gap: 8px;
-        }
-
-        .book-detail-thumb {
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            border-radius: 10px;
-            background: #fff;
-            padding: 4px;
-            cursor: pointer;
-        }
-
-        .book-detail-thumb.active {
-            border-color: #8f6f47;
-        }
-
-        .book-detail-thumb img {
-            width: 100%;
-            height: 56px;
-            object-fit: cover;
-            border-radius: 8px;
-            display: block;
-        }
-
-        .book-detail-category {
-            display: inline-block;
-            padding: 4px 10px;
-            border-radius: 999px;
-            background: rgba(139, 111, 71, 0.12);
-            color: #8f6f47;
-            font-size: 13px;
-            margin-bottom: 10px;
-        }
-
-        .book-detail-title {
-            margin-bottom: 10px;
-        }
-
-        .book-detail-author,
-        .book-detail-description {
-            color: var(--text-light);
-        }
-
-        .book-detail-meta {
-            display: flex;
-            gap: 16px;
-            flex-wrap: wrap;
-            margin: 12px 0 16px;
-        }
-
-        .book-detail-extra-meta {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            margin-bottom: 14px;
-            color: var(--text-light);
-        }
-
-        .book-detail-tags {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-bottom: 14px;
-        }
-
-        .book-detail-tag {
-            padding: 4px 10px;
-            border-radius: 999px;
-            background: rgba(143, 111, 71, 0.1);
-            color: #8f6f47;
-            font-size: 12px;
-        }
-
-        .book-detail-description {
-            word-break: break-word;
-        }
-
-        .book-detail-description img {
-            max-width: 100%;
-            height: auto;
-        }
-
-        .book-detail-actions {
-            margin-top: 18px;
-        }
-
-        .book-detail-gallery {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .book-detail-main-image {
-            background: #f8f5ef;
-            border-radius: var(--border-radius);
-            overflow: hidden;
-            min-height: 300px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .book-detail-main-image img {
-            width: 100%;
-            height: 100%;
-            max-height: 360px;
-            object-fit: cover;
-            display: block;
-        }
-
-        .book-detail-thumbs {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .book-detail-thumb {
-            border: 1px solid rgba(0,0,0,0.12);
-            background: #fff;
-            border-radius: 8px;
-            padding: 0;
-            width: 64px;
-            height: 64px;
-            overflow: hidden;
-            cursor: pointer;
-        }
-
-        .book-detail-thumb.active {
-            border-color: #8f6f47;
-        }
-
-        .book-detail-thumb img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            display: block;
-        }
-
-        .book-detail-extra p {
-            margin: 6px 0;
-            color: var(--text-light);
-        }
-
-        .book-detail-tags {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin: 14px 0;
-        }
-
-        .book-detail-tag {
-            display: inline-block;
-            padding: 4px 10px;
-            border-radius: 999px;
-            background: rgba(139, 111, 71, 0.1);
-            color: #8f6f47;
-            font-size: 12px;
-        }
-
-        .book-detail-description p {
-            margin: 0 0 12px;
-        }
-
-        .book-detail-related {
-            margin-top: 20px;
-            padding-top: 18px;
-            border-top: 1px solid rgba(0,0,0,0.08);
-        }
-
-        .book-detail-related h4 {
-            margin-bottom: 12px;
-        }
-
-        .book-detail-related-list {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .book-detail-related-item {
-            border: 1px solid rgba(0,0,0,0.12);
-            background: #fff;
-            border-radius: 999px;
-            padding: 8px 12px;
-            cursor: pointer;
-        }
-
-        @media (max-width: 640px) {
-            .book-detail-dialog {
-                padding: 18px;
-            }
-
-            .book-detail-layout {
-                grid-template-columns: 1fr;
-            }
-
-            .book-detail-cover {
-                min-height: 220px;
-            }
-        }
-
         @media (max-width: 480px) {
             .notification {
                 min-width: auto;
