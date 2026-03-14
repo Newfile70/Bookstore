@@ -192,6 +192,88 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }
 
+    async function getCurrentSupabaseUser() {
+        if (!supabaseClient || !supabaseClient.auth || !supabaseClient.auth.getUser) return null;
+        try {
+            const { data, error } = await supabaseClient.auth.getUser();
+            if (error) return null;
+            return data?.user || null;
+        } catch {
+            return null;
+        }
+    }
+
+    function toLowerTrim(value) {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    async function collectCurrentUserNameAliases(authUser) {
+        const aliases = new Set();
+        const loginUsername = String(sessionStorage.getItem('loginUsername') || '').trim();
+        const sessionUsername = String(sessionStorage.getItem('username') || '').trim();
+
+        if (loginUsername) aliases.add(toLowerTrim(loginUsername));
+        if (sessionUsername) aliases.add(toLowerTrim(sessionUsername));
+
+        if (authUser?.email) {
+            const lowerEmail = toLowerTrim(authUser.email);
+            aliases.add(lowerEmail);
+            aliases.add(lowerEmail.split('@')[0]);
+        }
+
+        if (supabaseClient) {
+            try {
+                let profile = null;
+                if (authUser?.id) {
+                    const { data } = await supabaseClient
+                        .from('users')
+                        .select('username,email')
+                        .eq('id', authUser.id)
+                        .maybeSingle();
+                    profile = data || null;
+                }
+
+                if (!profile && loginUsername) {
+                    const { data } = await supabaseClient
+                        .from('users')
+                        .select('username,email')
+                        .eq('username', loginUsername)
+                        .maybeSingle();
+                    profile = data || null;
+                }
+
+                if (!profile && authUser?.email) {
+                    const { data } = await supabaseClient
+                        .from('users')
+                        .select('username,email')
+                        .eq('email', authUser.email)
+                        .maybeSingle();
+                    profile = data || null;
+                }
+
+                if (profile?.username) {
+                    const canonical = String(profile.username).trim();
+                    if (canonical) {
+                        aliases.add(toLowerTrim(canonical));
+                        sessionStorage.setItem('loginUsername', canonical);
+                        sessionStorage.setItem('username', canonical);
+                    }
+                }
+
+                if (profile?.email) {
+                    const lowerProfileEmail = toLowerTrim(profile.email);
+                    aliases.add(lowerProfileEmail);
+                    aliases.add(lowerProfileEmail.split('@')[0]);
+                }
+            } catch (e) {
+                console.warn('Collect user aliases failed:', e);
+            }
+        }
+
+        aliases.delete('');
+        return aliases;
+    }
+
     function isFavoriteBook(bookId) {
         return favoriteBookIds.has(String(bookId));
     }
@@ -781,8 +863,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         userOrders = [];
         if (isGuestUser()) return;
 
-        const userId = await getCurrentSupabaseUserId();
-        const loginUsername = String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim().toLowerCase();
+        const authUser = await getCurrentSupabaseUser();
+        const userId = authUser?.id || null;
+        const nameAliases = await collectCurrentUserNameAliases(authUser);
         const rows = await fetchOrdersFromSupabase();
 
         userOrders = rows
@@ -790,7 +873,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 const rowUserId = String(row?.user_id ?? row?.userId ?? '').trim();
                 const rowCustomerName = String(row?.customer_name ?? row?.customerName ?? '').trim().toLowerCase();
                 if (userId && rowUserId && rowUserId === String(userId)) return true;
-                if (loginUsername && rowCustomerName && rowCustomerName === loginUsername) return true;
+                if (rowCustomerName && nameAliases.has(rowCustomerName)) return true;
                 return false;
             })
             .map(normalizeUserOrder)

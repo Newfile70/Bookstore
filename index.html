@@ -616,13 +616,14 @@
                 if (supabaseClient) {
                     try {
                         let emailForSignIn = username;
+                        let canonicalUsername = username;
 
                         // If input doesn't look like an email, attempt to find the user's email by username
                         if (!username.includes('@')) {
                             try {
                                 const { data: userRow, error: fetchErr } = await supabaseClient
                                     .from('users')
-                                    .select('email')
+                                    .select('email, username')
                                     .eq('username', username)
                                     .limit(1)
                                     .maybeSingle();
@@ -631,6 +632,7 @@
                                     console.warn('Lookup email by username failed:', fetchErr);
                                 } else if (userRow && userRow.email) {
                                     emailForSignIn = userRow.email;
+                                    canonicalUsername = String(userRow.username || username).trim() || username;
                                 }
                             } catch (fetchEx) {
                                 console.warn('Error fetching user email:', fetchEx);
@@ -639,11 +641,28 @@
 
                         const { data, error } = await supabaseClient.auth.signInWithPassword({ email: emailForSignIn, password });
                         if (!error && data && (data.user || data.access_token)) {
-                            const displayName = (data.user && data.user.user_metadata && data.user.user_metadata.name) || (data.user && data.user.email) || username;
+                            if (username.includes('@')) {
+                                try {
+                                    const { data: userRowByEmail } = await supabaseClient
+                                        .from('users')
+                                        .select('username')
+                                        .eq('email', emailForSignIn)
+                                        .limit(1)
+                                        .maybeSingle();
+                                    if (userRowByEmail?.username) {
+                                        canonicalUsername = String(userRowByEmail.username).trim() || canonicalUsername;
+                                    }
+                                } catch (lookupErr) {
+                                    console.warn('Lookup username by email failed:', lookupErr);
+                                }
+                            }
+
+                            const normalizedUsername = String(canonicalUsername || '').trim() || (username.includes('@') ? username.split('@')[0] : username);
+                            const displayName = normalizedUsername;
                             if (rememberMe) localStorage.setItem('rememberedUser', username);
                             sessionStorage.setItem('loggedIn', 'true');
-                            sessionStorage.setItem('username', displayName);
-                            sessionStorage.setItem('loginUsername', username);
+                            sessionStorage.setItem('username', normalizedUsername);
+                            sessionStorage.setItem('loginUsername', normalizedUsername);
                             sessionStorage.setItem('userType', 'registered');
                             sessionStorage.removeItem('merchantAuthenticated');
                             showMessage(`欢迎回来，${displayName}！正在跳转...`, 'success');
