@@ -133,6 +133,37 @@
         .form-group {
             margin-bottom: 20px;
         }
+
+        .login-mode-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .login-mode-btn {
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            background: #fff;
+            color: var(--text-color);
+            padding: 10px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .login-mode-btn.active {
+            background: var(--primary-color);
+            color: #fff;
+            border-color: var(--primary-color);
+        }
+
+        .login-mode-tip {
+            font-size: 13px;
+            color: var(--text-light);
+            margin-bottom: 15px;
+            text-align: center;
+        }
         
         .form-label {
             display: block;
@@ -353,12 +384,19 @@
             <!-- 右侧登录表单 -->
             <div class="login-right">
                 <form class="login-form" id="loginForm">
-                    <h2>用户登录</h2>
+                    <h2 id="loginTitle">用户登录</h2>
                     
                     <div id="loginMessage" class="login-message"></div>
+
+                    <div class="login-mode-switch" id="loginModeSwitch">
+                        <button type="button" class="login-mode-btn active" data-mode="user">普通用户登录</button>
+                        <button type="button" class="login-mode-btn" data-mode="merchant">商家登录</button>
+                    </div>
+
+                    <div class="login-mode-tip" id="loginModeTip">请选择登录身份，普通用户和商家账号分开验证</div>
                     
                     <div class="form-group">
-                        <label class="form-label" for="username">用户名或邮箱</label>
+                        <label class="form-label" for="username" id="usernameLabel">用户名或邮箱</label>
                         <input type="text" id="username" class="form-control" placeholder="请输入用户名或邮箱" required>
                     </div>
                     
@@ -463,13 +501,65 @@
             const registerLink = document.getElementById('registerLink');
             const menuToggle = document.getElementById('menu-toggle');
             const navLinks = document.querySelector('.nav-links');
+            const loginModeBtns = document.querySelectorAll('.login-mode-btn');
+            const loginTitle = document.getElementById('loginTitle');
+            const loginModeTip = document.getElementById('loginModeTip');
+            const usernameLabel = document.getElementById('usernameLabel');
 
             // 模拟用户数据（离线回退）
             const testUsers = [
                 { username: 'demo', password: 'demo123', name: '演示用户' },
-                { username: 'reader', password: 'read2025', name: '阅读爱好者' },
-                { username: 'admin', password: 'admin123', name: '管理员' }
+                { username: 'reader', password: 'read2025', name: '阅读爱好者' }
             ];
+
+            let currentLoginMode = 'user';
+
+            async function verifyMerchantCredential(username, password) {
+                if (!supabaseClient) return null;
+                try {
+                    const { data, error } = await supabaseClient.rpc('verify_merchant_login', {
+                        p_username: username,
+                        p_password: password
+                    });
+                    if (error) {
+                        console.error('verify_merchant_login rpc error:', error);
+                        return null;
+                    }
+                    return Array.isArray(data) && data.length ? data[0] : null;
+                } catch (err) {
+                    console.error('verify_merchant_login rpc unexpected error:', err);
+                    return null;
+                }
+            }
+
+            function setLoginMode(mode) {
+                currentLoginMode = mode === 'merchant' ? 'merchant' : 'user';
+                loginModeBtns.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === currentLoginMode);
+                });
+
+                if (currentLoginMode === 'merchant') {
+                    loginTitle.textContent = '商家登录';
+                    loginModeTip.textContent = '仅商家（管理员）账号可登录管理后台';
+                    usernameLabel.textContent = '商家用户名';
+                    usernameInput.placeholder = '请输入商家用户名';
+                    forgotPasswordLink.style.display = 'none';
+                    registerLink.style.display = '';
+                    registerLink.textContent = '商户注册';
+                    registerLink.href = 'register.html?mode=merchant';
+                    guestLoginBtn.style.display = 'none';
+                } else {
+                    loginTitle.textContent = '用户登录';
+                    loginModeTip.textContent = '请选择登录身份，普通用户和商家账号分开验证';
+                    usernameLabel.textContent = '用户名或邮箱';
+                    usernameInput.placeholder = '请输入用户名或邮箱';
+                    forgotPasswordLink.style.display = '';
+                    registerLink.style.display = '';
+                    registerLink.textContent = '立即注册';
+                    registerLink.href = 'register.html';
+                    guestLoginBtn.style.display = '';
+                }
+            }
 
             // 显示消息
             function showMessage(message, type) {
@@ -488,6 +578,39 @@
                 const rememberMe = document.getElementById('rememberMe').checked;
 
                 if (!username || !passwordTrimmed) { showMessage('请输入用户名和密码', 'error'); return; }
+
+                if (currentLoginMode === 'merchant') {
+                    if (!supabaseClient) {
+                        showMessage('当前无法连接 Supabase，商家登录不可用', 'error');
+                        return;
+                    }
+
+                    const merchant = await verifyMerchantCredential(username, password);
+                    if (!merchant) {
+                        showMessage('商家用户名或密码错误，请重试', 'error');
+                        passwordInput.value = '';
+                        return;
+                    }
+
+                    if (rememberMe) localStorage.setItem('rememberedUser', username);
+                    sessionStorage.setItem('loggedIn', 'true');
+                    sessionStorage.setItem('username', merchant.shop_name || merchant.username || username);
+                    sessionStorage.setItem('loginUsername', username);
+                    sessionStorage.setItem('userType', 'merchant');
+                    sessionStorage.setItem('merchantAuthenticated', 'true');
+                    showMessage(`欢迎，${merchant.shop_name || merchant.username || username}！正在进入管理后台...`, 'success');
+                    setTimeout(() => { window.location.href = 'admin.html'; }, 1000);
+                    return;
+                }
+
+                if (supabaseClient) {
+                    const merchant = await verifyMerchantCredential(username, password);
+                    if (merchant) {
+                        showMessage('该账号为商家账号，请切换到“商家登录”入口', 'error');
+                        passwordInput.value = '';
+                        return;
+                    }
+                }
 
                 // Supabase expects an email for auth; if user entered a username, try to lookup email first
                 if (supabaseClient) {
@@ -520,7 +643,9 @@
                             if (rememberMe) localStorage.setItem('rememberedUser', username);
                             sessionStorage.setItem('loggedIn', 'true');
                             sessionStorage.setItem('username', displayName);
+                            sessionStorage.setItem('loginUsername', username);
                             sessionStorage.setItem('userType', 'registered');
+                            sessionStorage.removeItem('merchantAuthenticated');
                             showMessage(`欢迎回来，${displayName}！正在跳转...`, 'success');
                             setTimeout(() => { window.location.href = 'bookstore.html'; }, 1200);
                             return;
@@ -537,7 +662,9 @@
                     if (rememberMe) localStorage.setItem('rememberedUser', username);
                     sessionStorage.setItem('loggedIn', 'true');
                     sessionStorage.setItem('username', user.name);
+                    sessionStorage.setItem('loginUsername', username);
                     sessionStorage.setItem('userType', 'registered');
+                    sessionStorage.removeItem('merchantAuthenticated');
                     showMessage(`欢迎回来，${user.name}！正在跳转...`, 'success');
                     setTimeout(() => { window.location.href = 'bookstore.html'; }, 1200);
                     return;
@@ -552,7 +679,9 @@
                 showMessage('您已使用游客身份登录，部分功能可能受限', 'info');
                 sessionStorage.setItem('loggedIn', 'true');
                 sessionStorage.setItem('username', '游客');
+                sessionStorage.setItem('loginUsername', '游客');
                 sessionStorage.setItem('userType', 'guest');
+                sessionStorage.removeItem('merchantAuthenticated');
                 setTimeout(() => { window.location.href = 'bookstore.html'; }, 1500);
             });
 
@@ -562,6 +691,12 @@
 
             // 移动端菜单切换
             menuToggle.addEventListener('click', function() { navLinks.classList.toggle('active'); });
+
+            loginModeBtns.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    setLoginMode(this.dataset.mode);
+                });
+            });
 
             // 检查记住的用户
             const rememberedUser = localStorage.getItem('rememberedUser');
@@ -573,6 +708,9 @@
                 showMessage(`注册成功：${registeredEmail}。请使用该邮箱登录。`, 'success');
                 sessionStorage.removeItem('registeredEmail');
             }
+
+            const modeFromQuery = new URLSearchParams(window.location.search).get('mode');
+            setLoginMode(modeFromQuery === 'merchant' ? 'merchant' : 'user');
         });
     </script>
 </body>

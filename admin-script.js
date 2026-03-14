@@ -16,13 +16,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         pending: '待处理',
         hold: '暂缓',
         shipped: '已发货',
+        arrived: '已到货',
+        received: '已收货',
         cancelled: '已取消'
     };
 
     const ORDER_STATUS_TRANSITIONS = {
         pending: ['hold', 'shipped', 'cancelled'],
         hold: ['shipped', 'cancelled'],
-        shipped: [],
+        shipped: ['arrived'],
+        arrived: ['received'],
+        received: [],
         cancelled: []
     };
 
@@ -38,16 +42,74 @@ document.addEventListener('DOMContentLoaded', async () => {
         booksGrid: document.getElementById('admin-products-grid'),
         ordersList: document.getElementById('admin-orders-list'),
         productModal: document.getElementById('product-modal'),
-        productForm: document.getElementById('product-form')
+        productForm: document.getElementById('product-form'),
+        logoutBtn: document.getElementById('logout-btn')
     };
+
+    function hasMerchantAccess() {
+        const loggedIn = sessionStorage.getItem('loggedIn') === 'true';
+        const userType = sessionStorage.getItem('userType');
+        const merchantAuthenticated = sessionStorage.getItem('merchantAuthenticated') === 'true';
+        return loggedIn && userType === 'merchant' && merchantAuthenticated;
+    }
+
+    function redirectToLogin() {
+        alert('请先通过商家登录后再访问管理后台');
+        window.location.replace('index.html');
+    }
+
+    if (!hasMerchantAccess()) {
+        redirectToLogin();
+        return;
+    }
 
     function safeParse(value, fallback) {
         try { return JSON.parse(value) ?? fallback; } catch { return fallback; }
     }
 
     function createPlaceholderSvg(text) {
-        const safe = encodeURIComponent(String(text).slice(0, 12));
-        return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="480" height="640"><rect width="100%" height="100%" fill="%236b8cbc"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="28" fill="white">${safe}</text></svg>`;
+        const safeText = String(text).slice(0, 12).replace(/[&<>"']/g, char => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char]));
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="640" viewBox="0 0 480 640"><rect width="100%" height="100%" fill="#b09d7b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="28" fill="white">${safeText}</text></svg>`;
+        return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+    }
+
+    function isGeneratedPlaceholderPhoto(value) {
+        const text = String(value || '').trim();
+            return /^data:image\/svg\+xml/i.test(text)
+                || /^<svg[\s>]/i.test(text)
+                || /^<\?xml[\s\S]*<svg[\s>]/i.test(text);
+    }
+
+    function normalizeEditablePhotos(value) {
+        return (Array.isArray(value) ? value : String(value || '').split(/[\n,]/))
+            .map(item => String(item).trim())
+            .filter(Boolean)
+            .filter(item => !isGeneratedPlaceholderPhoto(item));
+    }
+
+    function sanitizePhotoUrl(value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        if (isGeneratedPlaceholderPhoto(text)) return '';
+        if (/^javascript:/i.test(text)) return '';
+        if (/^https?:\/\//i.test(text) || /^data:image\//i.test(text) || /^blob:/i.test(text) || text.startsWith('/')) {
+            return text;
+        }
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(text)) {
+            return text;
+        }
+        return '';
+    }
+
+    function getDefaultCoverLabel() {
+        const title = document.getElementById('product-title')?.value?.trim();
+        return title || '默认封面';
     }
 
 
@@ -64,7 +126,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function getAllowedTransitions(status) {
-        return ORDER_STATUS_TRANSITIONS[status] || [];
+        const normalized = normalizeOrderStatus(status);
+        return ORDER_STATUS_TRANSITIONS[normalized] || [];
+    }
+
+    function normalizeOrderStatus(status) {
+        const raw = String(status || '').trim().toLowerCase();
+        if (!raw) return 'pending';
+
+        if (['pending', '待处理', '待发货', 'new'].includes(raw)) return 'pending';
+        if (['hold', '暂缓', 'on_hold', 'on-hold'].includes(raw)) return 'hold';
+        if (['shipped', '已发货', 'completed', 'done'].includes(raw)) return 'shipped';
+        if (['arrived', '已到货', 'delivered'].includes(raw)) return 'arrived';
+        if (['received_done', 'received', '已收货', 'signed'].includes(raw)) return 'received';
+        if (['cancelled', 'canceled', '已取消', 'cancel'].includes(raw)) return 'cancelled';
+
+        return raw;
     }
 
     function formatPhotoList(value) {
@@ -73,12 +150,65 @@ document.addEventListener('DOMContentLoaded', async () => {
             .filter(Boolean);
     }
 
+    function normalizeOrder(raw, index) {
+        const items = Array.isArray(raw?.items)
+            ? raw.items
+            : safeParse(raw?.items, []);
+        const userId = raw?.user_id ?? raw?.userId;
+        const fallbackCustomer = userId ? `用户 ${String(userId).slice(0, 8)}` : '未知客户';
+
+        return {
+            id: raw?.id ?? `local-${index}`,
+            poNumber: raw?.po_number ?? raw?.poNumber ?? `PO-${Date.now()}-${index}`,
+            customerName: raw?.customer_name ?? raw?.customerName ?? fallbackCustomer,
+            purchaseDate: raw?.purchase_date ?? raw?.purchaseDate ?? raw?.created_at ?? raw?.createdAt ?? new Date().toISOString(),
+            totalAmount: Number(raw?.total_amount ?? raw?.totalAmount ?? 0) || 0,
+            shippingAddress: raw?.shipping_address ?? raw?.shippingAddress ?? '-',
+            status: normalizeOrderStatus(raw?.status),
+            items: Array.isArray(items) ? items : [],
+            holdDate: raw?.hold_date ?? raw?.holdDate,
+            shipmentDate: raw?.shipment_date ?? raw?.shipmentDate,
+            arrivedDate: raw?.arrived_date ?? raw?.arrivedDate,
+            receivedDate: raw?.received_date ?? raw?.receivedDate,
+            cancelDate: raw?.cancel_date ?? raw?.cancelDate,
+            paymentMethod: raw?.payment_method ?? raw?.paymentMethod ?? ''
+        };
+    }
+
+    function toOrderUpdatePayload(status) {
+        const now = new Date().toISOString();
+        const payload = { status };
+        if (status === 'hold') payload.hold_date = now;
+        if (status === 'shipped') payload.shipment_date = now;
+        if (status === 'arrived') payload.arrived_date = now;
+        if (status === 'received') payload.received_date = now;
+        if (status === 'cancelled') payload.cancel_date = now;
+        return payload;
+    }
+
+    function toOrderUpdatePayloadCamel(status) {
+        const now = new Date().toISOString();
+        const payload = { status };
+        if (status === 'hold') payload.holdDate = now;
+        if (status === 'shipped') payload.shipmentDate = now;
+        if (status === 'arrived') payload.arrivedDate = now;
+        if (status === 'received') payload.receivedDate = now;
+        if (status === 'cancelled') payload.cancelDate = now;
+        return payload;
+    }
+
+    function shouldAutoReceiveOrder(order) {
+        return normalizeOrderStatus(order?.status) === 'arrived'
+            && order?.arrivedDate
+            && (Date.now() - new Date(order.arrivedDate).getTime()) >= 7 * 24 * 60 * 60 * 1000;
+    }
+
     function normalizeBook(raw, index) {
-        const photos = [raw.photos, raw.images, raw.photo_urls, raw.image_urls]
+        const photos = normalizeEditablePhotos([raw.photos, raw.images, raw.photo_urls, raw.image_urls]
             .filter(Boolean)
             .flatMap(value => Array.isArray(value) ? value : String(value).split(/[\n,]/))
             .map(item => String(item).trim())
-            .filter(Boolean);
+            .filter(Boolean));
         const tags = (Array.isArray(raw.tags) ? raw.tags : String(raw.tags || '').split(/[#,，,\s]+/))
             .map(tag => tag.trim())
             .filter(Boolean);
@@ -94,9 +224,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             publisher: raw.publisher || '未知出版社',
             isbn: raw.isbn || `ISBN-${String(index + 100000)}`,
             tags,
-            photos: photos.length ? photos : [createPlaceholderSvg(raw.title ?? '图书')],
+            photos,
             disabled: Boolean(raw.disabled),
-            color: raw.color || '#6b8cbc'
+            color: raw.color || '#b09d7b'
         };
     }
 
@@ -117,8 +247,69 @@ document.addEventListener('DOMContentLoaded', async () => {
         localStorage.setItem(STORAGE_KEYS.books, JSON.stringify(books));
     }
 
-    function loadOrders() {
-        orders = safeParse(localStorage.getItem(STORAGE_KEYS.orders), []).sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+    async function loadOrders() {
+        let source = [];
+
+        if (client) {
+            try {
+                const orderFields = ['purchase_date', 'purchaseDate', 'created_at', 'createdAt'];
+                for (const field of orderFields) {
+                    const { data, error } = await client
+                        .from('orders')
+                        .select('*')
+                        .order(field, { ascending: false });
+                    if (!error && Array.isArray(data)) {
+                        source = data;
+                        break;
+                    }
+
+                    if (error) {
+                        const msg = String(error.message || '');
+                        const missingColumn = getMissingColumnName(error);
+                        if (missingColumn || msg.includes('schema cache')) {
+                            continue;
+                        }
+                        console.error('load orders from Supabase failed', error);
+                        break;
+                    }
+                }
+
+                if (!source.length) {
+                    const { data, error } = await client.from('orders').select('*');
+                    if (!error && Array.isArray(data)) {
+                        source = data;
+                    } else if (error) {
+                        console.error('load orders from Supabase fallback failed', error);
+                    }
+                }
+            } catch (err) {
+                console.error('load orders failed', err);
+            }
+        }
+
+        if (!source.length) {
+            source = safeParse(localStorage.getItem(STORAGE_KEYS.orders), []);
+        }
+
+        orders = source
+            .map(normalizeOrder)
+            .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+
+        const autoReceiveTargets = orders.filter(shouldAutoReceiveOrder);
+        for (const order of autoReceiveTargets) {
+            order.status = 'received';
+            order.receivedDate = new Date().toISOString();
+            if (client) {
+                for (const payload of [toOrderUpdatePayload('received'), toOrderUpdatePayloadCamel('received'), { status: 'received' }]) {
+                    const { error } = await client.from('orders').update(payload).eq('id', order.id);
+                    if (!error) break;
+                    const msg = String(error?.message || '');
+                    if (!msg.includes('schema cache') && !msg.includes('column')) break;
+                }
+            }
+        }
+
+        persistOrders();
     }
 
     function persistBooks() {
@@ -205,6 +396,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <button class="btn btn-outline admin-order-filter" type="button" data-status="pending">待处理</button>
                     <button class="btn btn-outline admin-order-filter" type="button" data-status="hold">暂缓</button>
                     <button class="btn btn-outline admin-order-filter" type="button" data-status="shipped">已发货</button>
+                    <button class="btn btn-outline admin-order-filter" type="button" data-status="arrived">已到货</button>
+                    <button class="btn btn-outline admin-order-filter" type="button" data-status="received">已收货</button>
                     <button class="btn btn-outline admin-order-filter" type="button" data-status="cancelled">已取消</button>
                 </div>
                 <div class="admin-chip">Block B 订单处理</div>
@@ -224,6 +417,47 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function formatDate(value) {
         return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-';
+    }
+
+    function activateAdminSection(sectionId) {
+        const targetId = sectionId === 'orders' ? 'orders' : 'products';
+        document.body.classList.add('admin-tabbed');
+
+        document.querySelectorAll('.admin-section').forEach(section => {
+            section.classList.toggle('active', section.id === targetId);
+        });
+
+        document.querySelectorAll('.nav-links .nav-link[href^="#"]').forEach(link => {
+            const href = String(link.getAttribute('href') || '');
+            link.classList.toggle('active', href === `#${targetId}`);
+        });
+    }
+
+    function initAdminSectionTabs() {
+        const sectionLinks = Array.from(document.querySelectorAll('.nav-links .nav-link[href^="#"]'));
+        if (!sectionLinks.length) return;
+
+        if (!document.getElementById('admin-tabbed-style')) {
+            const style = document.createElement('style');
+            style.id = 'admin-tabbed-style';
+            style.textContent = `
+                body.admin-tabbed .admin-section{display:none;}
+                body.admin-tabbed .admin-section.active{display:block;}
+            `;
+            document.head.appendChild(style);
+        }
+
+        sectionLinks.forEach(link => {
+            link.addEventListener('click', event => {
+                event.preventDefault();
+                const targetId = String(link.getAttribute('href') || '').replace('#', '');
+                activateAdminSection(targetId || 'products');
+                history.replaceState(null, '', `#${targetId || 'products'}`);
+            });
+        });
+
+        const initialHash = window.location.hash.replace('#', '');
+        activateAdminSection(initialHash || 'products');
     }
 
     function renderBooks(filtered = books) {
@@ -269,26 +503,77 @@ document.addEventListener('DOMContentLoaded', async () => {
         const textarea = document.getElementById('product-photos');
         const grid = document.getElementById('photo-preview-grid');
         if (!textarea || !grid) return;
-        editingPhotos = (Array.isArray(editingPhotos) ? editingPhotos : []).map(item => String(item).trim()).filter(Boolean);
+        editingPhotos = normalizeEditablePhotos(editingPhotos);
         textarea.value = editingPhotos.join('\n');
-        grid.innerHTML = editingPhotos.length
-            ? editingPhotos.map((photo, index) => `
-                <div class="photo-preview-item">
-                    <img src="${photo}" alt="产品图片 ${index + 1}" onerror="this.src='${createPlaceholderSvg('图片失效')}'">
-                    <div style="font-size:12px;word-break:break-all;">${photo}</div>
-                    <button type="button" class="btn btn-outline remove-photo-btn" data-index="${index}">移除</button>
-                </div>
-            `).join('')
-            : '<div class="empty-state">暂无图片，请至少添加一张。</div>';
-        grid.querySelectorAll('.remove-photo-btn').forEach(btn => btn.addEventListener('click', () => {
-            editingPhotos.splice(Number(btn.dataset.index), 1);
-            renderPhotoManager();
-        }));
+        grid.innerHTML = '';
+
+        const defaultItem = document.createElement('div');
+        defaultItem.className = 'photo-preview-item';
+
+        const defaultImg = document.createElement('img');
+        defaultImg.alt = '系统默认封面';
+        defaultImg.src = createPlaceholderSvg(getDefaultCoverLabel());
+
+        const defaultText = document.createElement('div');
+        defaultText.style.fontSize = '12px';
+        defaultText.style.wordBreak = 'break-all';
+        defaultText.textContent = '系统默认封面（保留显示，不写入图片列表）';
+
+        const defaultBadge = document.createElement('button');
+        defaultBadge.type = 'button';
+        defaultBadge.className = 'btn btn-outline remove-photo-btn';
+        defaultBadge.disabled = true;
+        defaultBadge.textContent = '默认封面';
+
+        defaultItem.appendChild(defaultImg);
+        defaultItem.appendChild(defaultText);
+        defaultItem.appendChild(defaultBadge);
+        grid.appendChild(defaultItem);
+
+        if (!editingPhotos.length) {
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = '暂无自定义图片，当前将保留系统默认封面。';
+            grid.appendChild(empty);
+            return;
+        }
+
+        editingPhotos.forEach((photo, index) => {
+            const item = document.createElement('div');
+            item.className = 'photo-preview-item';
+
+            const img = document.createElement('img');
+            img.alt = `产品图片 ${index + 1}`;
+            img.src = sanitizePhotoUrl(photo) || createPlaceholderSvg('图片失效');
+            img.addEventListener('error', () => {
+                img.src = createPlaceholderSvg('图片失效');
+            });
+
+            const text = document.createElement('div');
+            text.style.fontSize = '12px';
+            text.style.wordBreak = 'break-all';
+            text.textContent = photo;
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-outline remove-photo-btn';
+            button.dataset.index = String(index);
+            button.textContent = '移除';
+            button.addEventListener('click', () => {
+                editingPhotos.splice(index, 1);
+                renderPhotoManager();
+            });
+
+            item.appendChild(img);
+            item.appendChild(text);
+            item.appendChild(button);
+            grid.appendChild(item);
+        });
     }
 
     function syncPhotosFromTextarea() {
         const rawPhotos = document.getElementById('product-photos')?.value || '';
-        editingPhotos = rawPhotos.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
+        editingPhotos = normalizeEditablePhotos(rawPhotos);
         renderPhotoManager();
     }
 
@@ -318,6 +603,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <button class="btn btn-secondary view-order-btn" type="button" data-id="${order.id}">查看详情</button>
                     <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="hold">设为暂缓</button>
                     <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="shipped">发货</button>
+                    <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="arrived">已到货</button>
                     <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="cancelled">取消</button>
                 </div>
             `;
@@ -326,39 +612,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             elements.ordersList.appendChild(card);
         });
     }
-
-
-    function syncPhotoTextarea(photos) {
-        const textarea = document.getElementById('product-photos');
-        if (textarea) textarea.value = photos.join('\n');
-    }
-
-    function renderPhotoManager(photos) {
-        const list = document.getElementById('photo-manager-list');
-        if (!list) return;
-        list.innerHTML = '';
-        const normalized = formatPhotoList(photos);
-        if (!normalized.length) {
-            list.innerHTML = '<div class="status-hint">暂无图片，将自动使用占位图。</div>';
-            return;
-        }
-        normalized.forEach((photo, index) => {
-            const item = document.createElement('div');
-            item.className = 'photo-item';
-            item.innerHTML = `
-                <img src="${photo}" alt="产品图片 ${index + 1}" onerror="this.src='${createPlaceholderSvg('图书')}'">
-                <div style="word-break:break-all;font-size:12px;color:#6b7280;">${photo}</div>
-                <button type="button" class="btn btn-outline remove-photo-btn" data-index="${index}">移除这张图</button>
-            `;
-            item.querySelector('.remove-photo-btn')?.addEventListener('click', () => {
-                const next = normalized.filter((_, currentIndex) => currentIndex !== index);
-                syncPhotoTextarea(next);
-                renderPhotoManager(next);
-            });
-            list.appendChild(item);
-        });
-    }
-
     function openProductModal(bookId = null) {
         editingProductId = bookId;
         const title = document.getElementById('product-form-title');
@@ -392,62 +645,138 @@ document.addEventListener('DOMContentLoaded', async () => {
     function getFormData() {
         syncPhotosFromTextarea();
         const photos = [...editingPhotos];
-        return normalizeBook({
-            id: document.getElementById('product-id').value.trim() || Date.now(),
-            title: document.getElementById('product-title').value.trim(),
-            author: document.getElementById('product-author').value.trim(),
-            price: document.getElementById('product-price').value,
-            rating: document.getElementById('product-rating').value,
-            description: document.getElementById('product-description').value.trim(),
-            category: document.getElementById('product-category').value,
-            tags: document.getElementById('product-tags').value,
-            publisher: document.getElementById('product-publisher').value.trim(),
-            isbn: document.getElementById('product-isbn').value.trim(),
-            summary_html: sanitizeSummaryHtml(document.getElementById('product-summary-html').value.trim()),
+        const rawId = document.getElementById('product-id').value.trim();
+        const idValue = rawId ? Number(rawId) : null;
+        if (rawId && (!Number.isFinite(idValue) || idValue <= 0)) {
+            alert('产品ID 必须是正整数，或留空自动生成');
+            return null;
+        }
+
+        return {
+            id: idValue,
+            title: document.getElementById('product-title').value.trim() || '未命名图书',
+            author: document.getElementById('product-author').value.trim() || '未知作者',
+            category: document.getElementById('product-category').value || 'all',
+            price: Number.parseFloat(document.getElementById('product-price').value) || 0,
+            rating: Number.parseFloat(document.getElementById('product-rating').value) || 4.5,
+            description: document.getElementById('product-description').value.trim() || '暂无简介',
+            summaryHtml: sanitizeSummaryHtml(document.getElementById('product-summary-html').value.trim() || '<p>暂无简介</p>'),
+            publisher: document.getElementById('product-publisher').value.trim() || '未知出版社',
+            isbn: document.getElementById('product-isbn').value.trim() || '',
+            tags: String(document.getElementById('product-tags').value || '').split(/[#,，,\s]+/).map(tag => tag.trim()).filter(Boolean),
             photos,
-            disabled: document.getElementById('product-disabled').checked
-        }, books.length);
+            disabled: document.getElementById('product-disabled').checked,
+            color: '#b09d7b'
+        };
+    }
+
+    function toBookPayload(book) {
+        const payload = {
+            title: book.title,
+            author: book.author,
+            category: book.category,
+            price: book.price,
+            rating: book.rating,
+            description: book.description,
+            summary_html: book.summaryHtml,
+            publisher: book.publisher,
+            isbn: book.isbn,
+            tags: book.tags,
+            photos: book.photos,
+            disabled: book.disabled,
+            color: book.color
+        };
+        if (book.id !== null && book.id !== undefined && String(book.id).trim() !== '') {
+            payload.id = book.id;
+        }
+        return payload;
+    }
+
+    function toBookPayloadBasic(book) {
+        const payload = {
+            title: book.title,
+            author: book.author,
+            category: book.category,
+            price: book.price,
+            rating: book.rating,
+            description: book.description
+        };
+        if (book.id !== null && book.id !== undefined && String(book.id).trim() !== '') {
+            payload.id = book.id;
+        }
+        return payload;
+    }
+
+    function getMissingColumnName(error) {
+        const message = String(error?.message || '');
+        const postgrestMatch = message.match(/Could not find the '([^']+)' column/i);
+        if (postgrestMatch && postgrestMatch[1]) return postgrestMatch[1];
+
+        const pgMatch = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+        if (pgMatch && pgMatch[1]) return pgMatch[1];
+
+        return null;
     }
 
     async function saveBook(book) {
-        const index = books.findIndex(item => String(item.id) === String(editingProductId ?? book.id));
-        if (index >= 0) {
-            books[index] = book;
-        } else {
-            books.unshift(book);
+        if (!client) {
+            alert('未连接到 Supabase，无法同步到云端。请检查网络或 Supabase 配置。');
+            return false;
         }
-        persistBooks();
-        if (client) {
-            try {
-                await client.from('books').upsert([{ 
-                    id: book.id,
-                    title: book.title,
-                    author: book.author,
-                    category: book.category,
-                    price: book.price,
-                    rating: book.rating,
-                    description: book.description,
-                    summary_html: book.summaryHtml,
-                    publisher: book.publisher,
-                    isbn: book.isbn,
-                    tags: book.tags,
-                    photos: book.photos,
-                    disabled: book.disabled,
-                    color: book.color
-                }]);
-            } catch (err) {
-                console.warn('supabase upsert skipped', err);
+
+        const payload = toBookPayload(book);
+        const safePayload = { ...payload };
+
+        let data = null;
+        let error = null;
+
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+            const result = await client
+                .from('books')
+                .upsert([safePayload])
+                .select('*')
+                .maybeSingle();
+
+            data = result.data;
+            error = result.error;
+            if (!error) break;
+
+            const missingColumn = getMissingColumnName(error);
+            if (!missingColumn) break;
+            if (missingColumn === 'id') break;
+            if (!(missingColumn in safePayload)) break;
+
+            delete safePayload[missingColumn];
+        }
+
+        if (error) {
+            console.error('保存到 Supabase 失败:', error);
+            const msg = String(error.message || error.details || error.hint || error.code || '未知错误');
+            if (msg.includes('row-level security') || msg.includes('permission denied')) {
+                alert('保存失败：数据库 RLS/权限策略阻止了写入，请在 Supabase 为 books 表配置 INSERT/UPDATE 策略。');
+            } else {
+                alert(`保存失败：${msg}`);
             }
+            return false;
         }
+
+        const cloudBook = data ? normalizeBook(data, 0) : book;
+        const index = books.findIndex(item => String(item.id) === String(editingProductId ?? cloudBook.id ?? book.id));
+        if (index >= 0) books[index] = cloudBook;
+        else books.unshift(cloudBook);
+
+        persistBooks();
         renderBooks();
         closeProductModal();
+        return true;
     }
 
     async function toggleBookStatus(bookId) {
         const target = books.find(item => String(item.id) === String(bookId));
         if (!target) return;
-        target.disabled = !target.disabled;
-        await saveBook(target);
+        const next = { ...target, disabled: !target.disabled };
+        const ok = await saveBook(next);
+        if (!ok) renderBooks();
     }
 
     function searchBooks() {
@@ -463,17 +792,60 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderBooks(filtered);
     }
 
-    function updateOrderStatus(orderId, status) {
-        const order = orders.find(item => item.id === orderId);
+    async function updateOrderStatus(orderId, status) {
+        const order = orders.find(item => String(item.id) === String(orderId));
         if (!order) return;
-        if (!getAllowedTransitions(order.status).includes(status)) {
+        const currentStatus = normalizeOrderStatus(order.status);
+        const targetStatus = normalizeOrderStatus(status);
+
+        if (!getAllowedTransitions(currentStatus).includes(targetStatus)) {
             alert('当前订单状态不允许执行这个操作');
             return;
         }
-        order.status = status;
-        if (status === 'hold') order.holdDate = new Date().toISOString();
-        if (status === 'shipped') order.shipmentDate = new Date().toISOString();
-        if (status === 'cancelled') order.cancelDate = new Date().toISOString();
+
+        if (client) {
+            const payloadCandidates = [toOrderUpdatePayload(targetStatus), toOrderUpdatePayloadCamel(targetStatus), { status: targetStatus }];
+            let updateError = null;
+
+            for (const payload of payloadCandidates) {
+                const { error } = await client
+                    .from('orders')
+                    .update(payload)
+                    .eq('id', order.id);
+
+                if (!error) {
+                    updateError = null;
+                    break;
+                }
+
+                updateError = error;
+                const msg = String(error.message || '');
+                const missingColumn = getMissingColumnName(error);
+                if (missingColumn || msg.includes('schema cache')) {
+                    continue;
+                }
+                break;
+            }
+
+            if (updateError) {
+                console.error('update order status failed', updateError);
+                const msg = String(updateError.message || updateError.details || updateError.hint || '未知错误');
+                const hint = msg.toLowerCase().includes('row-level security') || msg.toLowerCase().includes('permission denied')
+                    ? '可能是 orders 表缺少 UPDATE 策略，请执行 server/supabase_orders_schema_patch_existing.sql。'
+                    : (msg.includes('schema cache') || msg.includes('column'))
+                        ? '可能是 orders 字段结构与前端不一致，请执行 server/supabase_orders_schema_patch_existing.sql。'
+                        : '';
+                alert(`更新订单状态失败：${msg}${hint ? `\n${hint}` : ''}`);
+                return;
+            }
+        }
+
+        order.status = targetStatus;
+        if (targetStatus === 'hold') order.holdDate = new Date().toISOString();
+        if (targetStatus === 'shipped') order.shipmentDate = new Date().toISOString();
+        if (targetStatus === 'arrived') order.arrivedDate = new Date().toISOString();
+        if (targetStatus === 'received') order.receivedDate = new Date().toISOString();
+        if (targetStatus === 'cancelled') order.cancelDate = new Date().toISOString();
         persistOrders();
         renderOrders();
     }
@@ -490,9 +862,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             <div>状态：${ORDER_STATUS_LABELS[order.status] || order.status}</div>
             <div>下单时间：${formatDate(order.purchaseDate)}</div>
             <div>发货时间：${formatDate(order.shipmentDate)}</div>
+            <div>到货时间：${formatDate(order.arrivedDate)}</div>
+            <div>收货时间：${formatDate(order.receivedDate)}</div>
             <div>取消时间：${formatDate(order.cancelDate)}</div>
             <div>暂缓时间：${formatDate(order.holdDate)}</div>
-            <div class="status-hint">订单状态流转：待处理 → 暂缓/已发货/已取消；暂缓 → 已发货/已取消</div>
+            <div class="status-hint">订单状态流转：待处理 → 暂缓/已发货/已取消；暂缓 → 已发货/已取消；已发货 → 已到货；已到货 → 已收货</div>
             <div class="order-detail-panel">
                 <strong>订单商品</strong>
                 <ul>${(order.items || []).map(item => `<li>${item.title} × ${item.quantity} / 单价 ¥ ${(item.price || 0).toFixed(2)} / 小计 ¥ ${(item.subtotal || 0).toFixed(2)}</li>`).join('')}</ul>
@@ -506,6 +880,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function bindEvents() {
+        elements.logoutBtn?.addEventListener('click', () => {
+            sessionStorage.removeItem('loggedIn');
+            sessionStorage.removeItem('username');
+            sessionStorage.removeItem('userType');
+            sessionStorage.removeItem('merchantAuthenticated');
+            try { localStorage.removeItem('user'); } catch (err) { /* ignore */ }
+        });
+
         elements.addProductBtn?.addEventListener('click', () => openProductModal());
         document.getElementById('add-photo-btn')?.addEventListener('click', () => {
             const input = document.getElementById('product-photo-input');
@@ -521,6 +903,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         elements.productForm?.addEventListener('submit', async event => {
             event.preventDefault();
             const book = getFormData();
+            if (!book) return;
             if (!book.title || !book.author) return;
             await saveBook(book);
         });
@@ -546,8 +929,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     ensureUi();
+    initAdminSectionTabs();
     await loadBooks();
-    loadOrders();
+    await loadOrders();
     renderBooks();
     renderOrders();
     bindEvents();

@@ -66,6 +66,58 @@
             font-size: 18px;
             margin-top: 20px;
         }
+        .address-section {
+            margin: 26px 0 10px;
+            text-align: left;
+        }
+        .address-section h3 {
+            font-size: 18px;
+            margin-bottom: 12px;
+            color: var(--text-color);
+        }
+        .address-list {
+            display: grid;
+            gap: 12px;
+        }
+        .address-option {
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 14px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            cursor: pointer;
+            transition: var(--transition);
+            text-align: left;
+        }
+        .address-option:hover {
+            border-color: var(--primary-color);
+            background: #f9f5f0;
+        }
+        .address-option.selected {
+            border-color: var(--primary-color);
+            background: rgba(196,154,108,.12);
+        }
+        .address-option input {
+            margin-top: 4px;
+        }
+        .address-option-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .address-option-meta {
+            color: var(--text-light);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+        .address-empty {
+            padding: 14px;
+            border: 1px dashed var(--border-color);
+            border-radius: 12px;
+            background: #faf7f2;
+            color: var(--text-light);
+            text-align: left;
+        }
         .back-link {
             display: inline-block;
             margin-top: 20px;
@@ -93,6 +145,12 @@
                 <!-- 动态显示从购物车传递的总金额 -->
                 <div class="payment-amount" id="payment-amount">¥0.00</div>
                 <p>请选择支付方式</p>
+                <div class="address-section">
+                    <h3>选择收货地址</h3>
+                    <div id="address-list" class="address-list">
+                        <div class="address-empty">正在加载收货地址...</div>
+                    </div>
+                </div>
                 <div class="payment-methods">
                     <button class="payment-method-btn" id="pay-wechat"><i class="fab fa-weixin"></i> 微信</button>
                     <button class="payment-method-btn" id="pay-alipay"><i class="fab fa-alipay"></i> 支付宝</button>
@@ -112,27 +170,559 @@
         </div>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
+        const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
+        const CHECKOUT_PAYLOAD_KEY = 'bookstore_checkout_payload_v1';
+        const client = (typeof supabase !== 'undefined' && supabase?.createClient)
+            ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+            : null;
+        let currentAuthUser = null;
+        let usersSupportsShippingAddress = true;
+
         // 从 URL 获取 total 参数（由 bookstore.html 传递）
         function getQueryParam(name) {
             const urlParams = new URLSearchParams(window.location.search);
             return urlParams.get(name);
         }
+
+        function safeParseJson(value, fallback) {
+            try {
+                const parsed = JSON.parse(value);
+                return parsed ?? fallback;
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        function generatePoNumber() {
+            const suffix = Math.floor(Math.random() * 9000 + 1000);
+            return `PO${Date.now()}${suffix}`;
+        }
+
+        async function getCurrentSupabaseUserId() {
+            if (!client?.auth?.getUser) return null;
+            try {
+                const { data, error } = await client.auth.getUser();
+                if (error) return null;
+                return data?.user?.id || null;
+            } catch {
+                return null;
+            }
+        }
+
+        async function getCurrentSupabaseUser() {
+            if (!client?.auth?.getUser) return null;
+            try {
+                const { data, error } = await client.auth.getUser();
+                if (error) return null;
+                return data?.user || null;
+            } catch {
+                return null;
+            }
+        }
+
+        function normalizeCheckoutPayload(total) {
+            const payload = safeParseJson(sessionStorage.getItem(CHECKOUT_PAYLOAD_KEY), null);
+            if (!payload || !Array.isArray(payload.items) || !payload.items.length) {
+                return {
+                    customerName: String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim() || '匿名用户',
+                    items: [],
+                    totalAmount: Number(total.toFixed(2)),
+                    cartStorageKey: null
+                };
+            }
+            return {
+                customerName: String(payload.customerName || '').trim() || '匿名用户',
+                items: payload.items.map(item => ({
+                    bookId: Number(item?.bookId),
+                    title: String(item?.title || '未命名图书'),
+                    quantity: Number(item?.quantity) || 0,
+                    price: Number(item?.price) || 0,
+                    subtotal: Number(item?.subtotal) || 0
+                })).filter(item => item.quantity > 0),
+                totalAmount: Number(payload.totalAmount) > 0 ? Number(payload.totalAmount) : Number(total.toFixed(2)),
+                cartStorageKey: typeof payload.cartStorageKey === 'string' ? payload.cartStorageKey : null
+            };
+        }
+
+        function clearCartAfterSuccess(cartStorageKey) {
+            try {
+                if (cartStorageKey) {
+                    localStorage.setItem(cartStorageKey, JSON.stringify([]));
+                }
+                sessionStorage.removeItem(CHECKOUT_PAYLOAD_KEY);
+            } catch (e) {
+                console.warn('Clear cart after success failed:', e);
+            }
+        }
+
+        function getMissingColumnName(message) {
+            const text = String(message || '');
+            const postgrestMatch = text.match(/Could not find the '([^']+)' column/i);
+            if (postgrestMatch && postgrestMatch[1]) return postgrestMatch[1];
+            const pgMatch = text.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+            if (pgMatch && pgMatch[1]) return pgMatch[1];
+            return '';
+        }
+
+        function buildOrderPayloadVariants(params) {
+            const {
+                poNumber,
+                customerName,
+                purchaseDate,
+                totalAmount,
+                shippingAddress,
+                status,
+                items,
+                paymentMethod,
+                userId
+            } = params;
+
+            const variants = [
+                {
+                    user_id: userId,
+                    po_number: poNumber,
+                    customer_name: customerName,
+                    purchase_date: purchaseDate,
+                    total_amount: totalAmount,
+                    shipping_address: shippingAddress,
+                    status,
+                    items,
+                    payment_method: paymentMethod
+                },
+                {
+                    user_id: userId,
+                    poNumber,
+                    customerName,
+                    purchaseDate,
+                    totalAmount,
+                    shippingAddress,
+                    status,
+                    items,
+                    paymentMethod
+                },
+                {
+                    user_id: userId,
+                    po_number: poNumber,
+                    customerName,
+                    purchaseDate,
+                    totalAmount,
+                    shippingAddress,
+                    status,
+                    items,
+                    paymentMethod
+                },
+                {
+                    user_id: userId,
+                    total_amount: totalAmount,
+                    status,
+                    created_at: purchaseDate
+                }
+            ];
+
+            variants.push(
+                {
+                    po_number: poNumber,
+                    customer_name: customerName,
+                    purchase_date: purchaseDate,
+                    total_amount: totalAmount,
+                    shipping_address: shippingAddress,
+                    status,
+                    items,
+                    payment_method: paymentMethod
+                },
+                {
+                    poNumber,
+                    customerName,
+                    purchaseDate,
+                    totalAmount,
+                    shippingAddress,
+                    status,
+                    items,
+                    paymentMethod
+                },
+                {
+                    po_number: poNumber,
+                    customerName,
+                    purchaseDate,
+                    totalAmount,
+                    shippingAddress,
+                    status,
+                    items,
+                    paymentMethod
+                },
+                {
+                    total_amount: totalAmount,
+                    status,
+                    created_at: purchaseDate
+                }
+            );
+
+            return variants;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>\"']/g, function(char) {
+                return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char;
+            });
+        }
+
+        function isMissingColumnError(error, columnName) {
+            const text = String(error?.message || error?.details || error?.hint || error || '').toLowerCase();
+            if (!text) return false;
+            return text.includes(`'${String(columnName).toLowerCase()}'`) && text.includes('column') && text.includes('users');
+        }
+
+        function buildWritableUserPayload(profileLike, includeShippingAddress = true) {
+            const payload = {
+                id: profileLike.id,
+                username: profileLike.username,
+                email: profileLike.email ?? null,
+                full_name: profileLike.full_name ?? null
+            };
+            if (includeShippingAddress) {
+                payload.shipping_address = profileLike.shipping_address ?? null;
+            }
+            return payload;
+        }
+
+        async function upsertUserProfileCompat(profileLike) {
+            const firstPayload = buildWritableUserPayload(profileLike, usersSupportsShippingAddress);
+            let { error } = await client.from('users').upsert([firstPayload], { onConflict: 'id' });
+            if (!error) return;
+
+            if (usersSupportsShippingAddress && isMissingColumnError(error, 'shipping_address')) {
+                usersSupportsShippingAddress = false;
+                const fallbackPayload = buildWritableUserPayload(profileLike, false);
+                const retry = await client.from('users').upsert([fallbackPayload], { onConflict: 'id' });
+                error = retry.error;
+            }
+
+            if (error) throw error;
+        }
+
+        async function updateUserProfileByUsernameCompat(username, profileLike) {
+            const firstPayload = {
+                id: profileLike.id,
+                email: profileLike.email ?? null,
+                full_name: profileLike.full_name ?? null,
+                shipping_address: profileLike.shipping_address ?? null
+            };
+
+            let response = await client
+                .from('users')
+                .update(usersSupportsShippingAddress ? firstPayload : {
+                    id: firstPayload.id,
+                    email: firstPayload.email,
+                    full_name: firstPayload.full_name
+                })
+                .eq('username', username)
+                .select('*')
+                .maybeSingle();
+
+            if (response.error && usersSupportsShippingAddress && isMissingColumnError(response.error, 'shipping_address')) {
+                usersSupportsShippingAddress = false;
+                response = await client
+                    .from('users')
+                    .update({ id: firstPayload.id, email: firstPayload.email, full_name: firstPayload.full_name })
+                    .eq('username', username)
+                    .select('*')
+                    .maybeSingle();
+            }
+
+            if (response.error) throw response.error;
+            return response.data || null;
+        }
+
+        function buildProfileSeed(authUser, loginUsername, existingProfile = null) {
+            return {
+                id: authUser.id,
+                username: String(
+                    existingProfile?.username ||
+                    loginUsername ||
+                    authUser.user_metadata?.username ||
+                    authUser.user_metadata?.name ||
+                    authUser.email?.split('@')[0] ||
+                    ''
+                ).trim(),
+                email: authUser.email || existingProfile?.email || null,
+                full_name: existingProfile?.full_name || authUser.user_metadata?.full_name || authUser.user_metadata?.name || null,
+                shipping_address: usersSupportsShippingAddress ? (existingProfile?.shipping_address || null) : undefined
+            };
+        }
+
+        async function ensureProfileExistsFromAuth(authUser, loginUsername, existingProfile = null) {
+            if (!authUser?.id) return null;
+            const profile = buildProfileSeed(authUser, loginUsername, existingProfile);
+            if (!profile.username) return null;
+
+            await upsertUserProfileCompat(profile);
+
+            const { data, error: reloadError } = await client.from('users').select('*').eq('id', authUser.id).maybeSingle();
+            if (reloadError) throw reloadError;
+            return data || null;
+        }
+
+        async function alignProfileWithAuth(authUser, profile, loginUsername) {
+            if (!authUser?.id) return profile;
+            if (profile?.id && String(profile.id) === String(authUser.id)) return profile;
+
+            const nextProfile = buildProfileSeed(authUser, loginUsername, profile);
+            if (profile?.username) {
+                try {
+                    const data = await updateUserProfileByUsernameCompat(profile.username, {
+                        id: authUser.id,
+                        email: nextProfile.email,
+                        full_name: nextProfile.full_name,
+                        shipping_address: nextProfile.shipping_address
+                    });
+                    if (data) {
+                        return data;
+                    }
+                } catch (e) {
+                    console.warn('Align payment profile by username failed:', e);
+                }
+            }
+
+            return ensureProfileExistsFromAuth(authUser, loginUsername, profile);
+        }
+
+        async function getCurrentProfile() {
+            const authUser = await getCurrentSupabaseUser();
+            currentAuthUser = authUser;
+            const userId = authUser?.id || null;
+            const loginUsername = String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim();
+
+            let data = null;
+            if (userId) {
+                const { data: byId, error } = await client.from('users').select('*').eq('id', userId).maybeSingle();
+                if (error) throw error;
+                data = byId || null;
+            } else if (loginUsername) {
+                const { data: byUsername, error } = await client.from('users').select('*').eq('username', loginUsername).maybeSingle();
+                if (error) throw error;
+                data = byUsername || null;
+            }
+
+            if (!data && loginUsername && userId) {
+                const { data: byUsername, error } = await client.from('users').select('*').eq('username', loginUsername).maybeSingle();
+                if (error) throw error;
+                data = byUsername || null;
+            }
+
+            if (!data && authUser) {
+                data = await ensureProfileExistsFromAuth(authUser, loginUsername);
+            }
+
+            if (data && authUser && String(data.id || '') !== String(authUser.id)) {
+                data = await alignProfileWithAuth(authUser, data, loginUsername);
+            }
+
+            return data || null;
+        }
+
+        async function loadAddressOptions() {
+            const container = document.getElementById('address-list');
+            if (!container) return [];
+
+            const profile = await getCurrentProfile();
+            const addresses = [];
+            if (profile?.id) {
+                const { data, error } = await client
+                    .from('user_addresses')
+                    .select('*')
+                    .eq('user_id', profile.id)
+                    .order('is_default', { ascending: false })
+                    .order('created_at', { ascending: false });
+                if (error && !String(error.message || '').toLowerCase().includes('relation')) {
+                    throw error;
+                }
+                if (Array.isArray(data)) {
+                    addresses.push(...data.map(item => ({
+                        id: item.id,
+                        recipientName: item.recipient_name || profile.full_name || profile.username || '默认联系人',
+                        phone: item.phone || '',
+                        addressLine: item.address_line || '',
+                        isDefault: !!item.is_default
+                    })));
+                }
+            }
+
+            if (!addresses.length && profile?.shipping_address) {
+                addresses.push({
+                    id: 'profile-default',
+                    recipientName: profile.full_name || profile.username || '默认联系人',
+                    phone: '',
+                    addressLine: profile.shipping_address,
+                    isDefault: true
+                });
+            }
+
+            container.innerHTML = '';
+            if (!addresses.length) {
+                container.innerHTML = '<div class="address-empty">暂无收货地址，请先前往 <a href="account.html">账户设置</a> 添加地址。</div>';
+                return [];
+            }
+
+            const selectedId = String(sessionStorage.getItem('selectedShippingAddressId') || addresses.find(item => item.isDefault)?.id || addresses[0].id);
+            addresses.forEach((address, index) => {
+                const option = document.createElement('label');
+                const isChecked = String(address.id) === selectedId || (!selectedId && index === 0);
+                option.className = `address-option ${isChecked ? 'selected' : ''}`;
+                option.innerHTML = `
+                    <input type="radio" name="shipping-address" value="${escapeHtml(address.id)}" ${isChecked ? 'checked' : ''}>
+                    <div>
+                        <div class="address-option-title">${escapeHtml(address.recipientName)} ${address.isDefault ? '<span style="font-size:12px;color:#8b5e3c;">默认地址</span>' : ''}</div>
+                        <div class="address-option-meta">联系电话：${escapeHtml(address.phone || '-')}</div>
+                        <div class="address-option-meta">收货地址：${escapeHtml(address.addressLine || '-')}</div>
+                    </div>
+                `;
+                container.appendChild(option);
+            });
+
+            const syncSelectedState = () => {
+                const checked = container.querySelector('input[name="shipping-address"]:checked');
+                container.querySelectorAll('.address-option').forEach(option => {
+                    option.classList.toggle('selected', option.contains(checked));
+                });
+                if (checked) {
+                    sessionStorage.setItem('selectedShippingAddressId', checked.value);
+                }
+            };
+
+            container.querySelectorAll('input[name="shipping-address"]').forEach(input => {
+                input.addEventListener('change', syncSelectedState);
+            });
+            syncSelectedState();
+            return addresses;
+        }
+
+        function getSelectedShippingAddress(addresses) {
+            const selectedInput = document.querySelector('input[name="shipping-address"]:checked');
+            if (!selectedInput) return null;
+            return addresses.find(item => String(item.id) === String(selectedInput.value)) || null;
+        }
+
         const total = parseFloat(getQueryParam('total')) || 0;
         document.getElementById('payment-amount').textContent = '¥' + total.toFixed(2);
+        const checkoutPayload = normalizeCheckoutPayload(total);
+        let shippingAddresses = [];
+
+        (async function initAddressSelector() {
+            if (!client) {
+                const container = document.getElementById('address-list');
+                if (container) {
+                    container.innerHTML = '<div class="address-empty">当前无法连接到数据库，暂时不能加载收货地址。</div>';
+                }
+                return;
+            }
+
+            try {
+                shippingAddresses = await loadAddressOptions();
+            } catch (error) {
+                console.error('Load shipping addresses failed:', error);
+                const container = document.getElementById('address-list');
+                if (container) {
+                    container.innerHTML = `<div class="address-empty">加载收货地址失败：${escapeHtml(error.message || '未知错误')}</div>`;
+                }
+            }
+        })();
 
         // 支付方式选中效果（纯视觉，无实际功能）
         const methodBtns = document.querySelectorAll('.payment-method-btn');
+        let selectedMethod = '';
         methodBtns.forEach(btn => {
             btn.addEventListener('click', function() {
                 methodBtns.forEach(b => b.classList.remove('selected'));
                 this.classList.add('selected');
+                selectedMethod = this.id.replace('pay-', '');
             });
         });
 
-        // 下一步：跳转到成功页面，并附带相同金额
-        document.getElementById('next-btn').addEventListener('click', function() {
-            window.location.href = 'success.html?total=' + total.toFixed(2);
+        // 下一步：创建订单并跳转成功页
+        document.getElementById('next-btn').addEventListener('click', async function() {
+            if (!selectedMethod) {
+                alert('请先选择支付方式');
+                return;
+            }
+
+            if (!checkoutPayload.items.length) {
+                alert('订单商品为空，请返回购物车重新结算');
+                return;
+            }
+
+            const selectedAddress = getSelectedShippingAddress(shippingAddresses);
+            if (!selectedAddress?.addressLine) {
+                alert('请先选择收货地址，如暂无地址请前往账户设置添加');
+                return;
+            }
+
+            const button = this;
+            button.disabled = true;
+            button.textContent = '支付处理中...';
+
+            const purchaseDate = new Date().toISOString();
+            const poNumber = generatePoNumber();
+            const userId = await getCurrentSupabaseUserId();
+            const orderPayloadVariants = buildOrderPayloadVariants({
+                poNumber,
+                customerName: checkoutPayload.customerName,
+                purchaseDate,
+                totalAmount: checkoutPayload.totalAmount,
+                shippingAddress: `${selectedAddress.recipientName || ''}${selectedAddress.phone ? `（${selectedAddress.phone}）` : ''} ${selectedAddress.addressLine}`.trim(),
+                status: 'pending',
+                items: checkoutPayload.items,
+                paymentMethod: selectedMethod,
+                userId
+            });
+
+            let cloudSaved = false;
+            let cloudErrorMessage = '';
+            if (client) {
+                try {
+                    for (const payload of orderPayloadVariants) {
+                        const { error } = await client.from('orders').insert([payload]);
+                        if (!error) {
+                            cloudSaved = true;
+                            cloudErrorMessage = '';
+                            break;
+                        }
+
+                        console.error('Save order to Supabase failed:', error);
+                        cloudErrorMessage = String(error.message || error.details || error.hint || error.code || '未知错误');
+
+                        if (cloudErrorMessage.includes('orders_user_id_fkey') || cloudErrorMessage.toLowerCase().includes('foreign key constraint')) {
+                            continue;
+                        }
+
+                        const missingColumn = getMissingColumnName(cloudErrorMessage);
+                        if (!missingColumn) {
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Unexpected save order error:', e);
+                    cloudErrorMessage = String(e?.message || '网络或 Supabase 配置异常');
+                }
+            }
+
+            if (!cloudSaved) {
+                const hint = cloudErrorMessage.includes('relation') || cloudErrorMessage.includes('does not exist')
+                    ? '可能原因：orders 表尚未创建（请执行 server/supabase_orders_schema.sql）'
+                    : (cloudErrorMessage.toLowerCase().includes('row-level security') || cloudErrorMessage.toLowerCase().includes('permission denied'))
+                        ? '可能原因：RLS 策略未放行 INSERT（请检查 orders_insert_demo 策略）'
+                        : '请检查 Supabase 连接、orders 表结构与策略';
+
+                alert(`支付成功，但订单同步云端失败。\n错误：${cloudErrorMessage || '未知错误'}\n${hint}`);
+                button.disabled = false;
+                button.textContent = '下一步';
+                return;
+            }
+
+            clearCartAfterSuccess(checkoutPayload.cartStorageKey);
+            window.location.href = `success.html?total=${checkoutPayload.totalAmount.toFixed(2)}&po=${encodeURIComponent(poNumber)}`;
         });
     </script>
 </body>

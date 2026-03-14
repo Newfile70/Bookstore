@@ -133,6 +133,37 @@
         .form-group {
             margin-bottom: 20px;
         }
+
+        .register-mode-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .register-mode-btn {
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            background: #fff;
+            color: var(--text-color);
+            padding: 10px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .register-mode-btn.active {
+            background: var(--primary-color);
+            color: #fff;
+            border-color: var(--primary-color);
+        }
+
+        .register-mode-tip {
+            font-size: 13px;
+            color: var(--text-light);
+            margin-bottom: 15px;
+            text-align: center;
+        }
         
         .form-label {
             display: block;
@@ -340,6 +371,10 @@
             .register-form h2 {
                 font-size: 24px;
             }
+
+            .register-mode-switch {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -394,12 +429,19 @@
             <!-- 右侧注册表单 -->
             <div class="register-right">
                 <form class="register-form" id="registerForm">
-                    <h2>用户注册</h2>
+                    <h2 id="registerTitle">用户注册</h2>
                     
                     <div id="registerMessage" class="register-message"></div>
+
+                    <div class="register-mode-switch" id="registerModeSwitch">
+                        <button type="button" class="register-mode-btn active" data-mode="user">普通用户注册</button>
+                        <button type="button" class="register-mode-btn" data-mode="merchant">商户注册</button>
+                    </div>
+
+                    <div class="register-mode-tip" id="registerModeTip">创建普通用户账户，用于浏览与购买图书</div>
                     
                     <div class="form-row">
-                        <div class="form-group">
+                        <div class="form-group user-only">
                             <label class="form-label" for="fullName">姓名</label>
                             <input type="text" id="fullName" class="form-control" placeholder="请输入您的姓名">
                         </div>
@@ -409,8 +451,18 @@
                             <input type="text" id="username" class="form-control" placeholder="请输入用户名" required>
                         </div>
                     </div>
+
+                    <div class="form-group merchant-only" style="display:none;">
+                        <label class="form-label" for="shopName">店铺名称 *</label>
+                        <input type="text" id="shopName" class="form-control" placeholder="请输入店铺名称">
+                    </div>
+
+                    <div class="form-group merchant-only" style="display:none;">
+                        <label class="form-label" for="merchantContact">商户联系电话</label>
+                        <input type="text" id="merchantContact" class="form-control" placeholder="请输入联系电话（可选）">
+                    </div>
                     
-                    <div class="form-group">
+                    <div class="form-group user-only">
                         <label class="form-label" for="email">邮箱地址 *</label>
                         <input type="email" id="email" class="form-control" placeholder="请输入邮箱地址" required>
                     </div>
@@ -439,7 +491,7 @@
                         </div>
                     </div>
                     
-                    <div class="form-group">
+                    <div class="form-group user-only">
                         <label class="form-label" for="shippingAddress">收货地址 *</label>
                         <textarea id="shippingAddress" class="form-control" rows="3" 
                             placeholder="请输入详细收货地址（省/市/区 + 街道门牌）" required></textarea>
@@ -452,7 +504,7 @@
                         </label>
                     </div>
                     
-                    <div class="form-checkbox">
+                    <div class="form-checkbox user-only">
                         <input type="checkbox" id="subscribeNews">
                         <label for="subscribeNews">
                             订阅最新图书推荐和优惠信息
@@ -542,11 +594,53 @@
             const passwordInput = document.getElementById('password');
             const confirmPasswordInput = document.getElementById('confirmPassword');
             const fullNameInput = document.getElementById('fullName');
+            const shopNameInput = document.getElementById('shopName');
+            const merchantContactInput = document.getElementById('merchantContact');
             const passwordStrengthBar = document.getElementById('passwordStrengthBar');
             const togglePasswordBtn = document.getElementById('togglePassword');
             const toggleConfirmPasswordBtn = document.getElementById('toggleConfirmPassword');
             const menuToggle = document.getElementById('menu-toggle');
             const navLinks = document.querySelector('.nav-links');
+            const registerModeBtns = document.querySelectorAll('.register-mode-btn');
+            const registerTitle = document.getElementById('registerTitle');
+            const registerModeTip = document.getElementById('registerModeTip');
+
+            let currentRegisterMode = 'user';
+
+            function setRegisterMode(mode) {
+                currentRegisterMode = mode === 'merchant' ? 'merchant' : 'user';
+
+                registerModeBtns.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === currentRegisterMode);
+                });
+
+                const userOnlyElements = document.querySelectorAll('.user-only');
+                const merchantOnlyElements = document.querySelectorAll('.merchant-only');
+
+                if (currentRegisterMode === 'merchant') {
+                    registerTitle.textContent = '商户注册';
+                    registerModeTip.textContent = '注册商户账户后可从商家登录入口进入管理后台';
+                    userOnlyElements.forEach(el => { el.style.display = 'none'; });
+                    merchantOnlyElements.forEach(el => { el.style.display = ''; });
+
+                    emailInput.required = false;
+                    emailInput.value = '';
+                    document.getElementById('shippingAddress').required = false;
+                    document.getElementById('shippingAddress').value = '';
+                    shopNameInput.required = true;
+                } else {
+                    registerTitle.textContent = '用户注册';
+                    registerModeTip.textContent = '创建普通用户账户，用于浏览与购买图书';
+                    userOnlyElements.forEach(el => { el.style.display = ''; });
+                    merchantOnlyElements.forEach(el => { el.style.display = 'none'; });
+
+                    emailInput.required = true;
+                    document.getElementById('shippingAddress').required = true;
+                    shopNameInput.required = false;
+                    shopNameInput.value = '';
+                    merchantContactInput.value = '';
+                }
+            }
             
             // 显示消息
             function showMessage(message, type) {
@@ -619,10 +713,8 @@
             // 表单验证
             function validateForm() {
                 const username = usernameInput.value.trim();
-                const email = emailInput.value.trim();
                 const password = passwordInput.value;
                 const confirmPassword = confirmPasswordInput.value;
-                const fullName = fullNameInput.value.trim();
                 
                 // 用户名验证
                 if (username.length < 3) {
@@ -634,11 +726,19 @@
                     showMessage('用户名只能包含字母、数字和下划线', 'error');
                     return false;
                 }
-                
-                // 邮箱验证
-                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                    showMessage('请输入有效的邮箱地址', 'error');
-                    return false;
+
+                if (currentRegisterMode === 'merchant') {
+                    const shopName = shopNameInput.value.trim();
+                    if (shopName.length < 2) {
+                        showMessage('店铺名称至少需要2个字符', 'error');
+                        return false;
+                    }
+                } else {
+                    const email = emailInput.value.trim();
+                    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                        showMessage('请输入有效的邮箱地址', 'error');
+                        return false;
+                    }
                 }
                 
                 // 密码验证
@@ -670,11 +770,13 @@
                 if (!validateForm()) return;
 
                 const username = usernameInput.value.trim();
-                const email = emailInput.value.trim();
                 const password = passwordInput.value;
                 const fullName = fullNameInput.value.trim();
+                const email = emailInput.value.trim();
                 const subscribeNews = document.getElementById('subscribeNews').checked;
                 const shippingAddress = document.getElementById('shippingAddress').value.trim();
+                const shopName = shopNameInput.value.trim();
+                const merchantContact = merchantContactInput.value.trim();
 
                 const submitBtn = registerForm.querySelector('.register-btn');
                 const originalText = submitBtn.textContent;
@@ -682,6 +784,24 @@
                 submitBtn.disabled = true;
 
                 try {
+                    if (currentRegisterMode === 'merchant') {
+                        const { data: merchantResult, error: merchantError } = await supabaseClient.rpc('register_merchant', {
+                            p_username: username,
+                            p_password: password,
+                            p_shop_name: shopName,
+                            p_contact_phone: merchantContact || null
+                        });
+
+                        if (merchantError) throw merchantError;
+                        if (!merchantResult?.ok) {
+                            throw new Error(merchantResult?.message || '商户注册失败');
+                        }
+
+                        showMessage('商户注册成功！请返回登录页使用“商家登录”入口登录。', 'success');
+                        setTimeout(() => { window.location.href = 'index.html?mode=merchant'; }, 1800);
+                        return;
+                    }
+
                     // 使用 Supabase Auth 创建用户（不要在 DB 表里存明文密码）
                     const { data: signUpData, error: signUpError } = await supabaseClient.auth.signUp({ email, password });
                     if (signUpError) throw signUpError;
@@ -722,6 +842,8 @@
                         showMessage('该邮箱或用户名已被注册', 'error');
                     } else if (msg.includes('invalid')) {
                         showMessage('输入信息有误，请检查后重试', 'error');
+                    } else if (msg.includes('商户用户名已存在') || msg.includes('用户名已被占用')) {
+                        showMessage(msg, 'error');
                     } else if (msg.includes('violates row-level security')) {
                         showMessage('注册失败：数据库安全策略阻止了写入（RLS）。请在 Supabase 控制台添加合适的 INSERT 策略，或让后端执行插入。', 'error');
                     } else {
@@ -746,11 +868,20 @@
             toggleConfirmPasswordBtn.addEventListener('click', function() {
                 togglePasswordVisibility(confirmPasswordInput, this);
             });
+
+            registerModeBtns.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    setRegisterMode(this.dataset.mode);
+                });
+            });
             
             // 移动端菜单切换
             menuToggle.addEventListener('click', function() {
                 navLinks.classList.toggle('active');
             });
+
+            const modeFromQuery = new URLSearchParams(window.location.search).get('mode');
+            setRegisterMode(modeFromQuery === 'merchant' ? 'merchant' : 'user');
         });
     </script>
 </body>
