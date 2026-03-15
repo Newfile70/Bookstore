@@ -1,7 +1,17 @@
 // script.js - 懒得起名小书铺交互脚本
-
+const style = document.createElement('style');
+style.textContent = `
+    .order-highlight {
+        border: 2px solid var(--accent-color) !important;
+        background-color: rgba(196, 154, 108, 0.1) !important;
+        box-shadow: 0 0 15px rgba(196, 154, 108, 0.3) !important;
+        transition: all 0.3s ease;
+    }
+`;
+document.head.appendChild(style);
 document.addEventListener('DOMContentLoaded', async function() {
     let currentPage = 1;
+	
     const pageSize = 12;
     const CHECKOUT_PAYLOAD_KEY = 'bookstore_checkout_payload_v1';
     const CART_STORAGE_PREFIX = 'bookstore_cart_v1';
@@ -496,26 +506,37 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     
     // 初始化页面
-    async function initPage() {
-        await loadFavoritesFromSupabase();
-        await loadUserOrdersFromSupabase();
-        browsingHistory = loadHistoryFromStorage();
-        renderBooks(books);
-        renderRecommendations();
-        renderFavoritesSidebar();
-        renderOrdersSidebar();
-        renderHistorySidebar();
-        renderCart();
-        updateCartCount();
-        calculateTotal();
+   async function initPage() {
+    // 原有加载与渲染代码...
+    await loadFavoritesFromSupabase();
+    await loadUserOrdersFromSupabase();
+    browsingHistory = loadHistoryFromStorage();
+    renderBooks(books);
+    renderRecommendations();
+    renderFavoritesSidebar();
+    renderOrdersSidebar();      // 订单侧边栏渲染完成
+    renderHistorySidebar();
+    renderCart();
+    updateCartCount();
+    calculateTotal();
 
-        // 添加事件监听器
-        setupEventListeners();
-
-        // 根据当前用户状态应用游客UI限制（确保按钮在初始渲染后展示为禁用）
-        applyGuestUIRestrictions();
-        updateUserModeBadge();
+    // === 新增部分：处理从支付成功页跳转过来的订单高亮 ===
+    const urlParams = new URLSearchParams(window.location.search);
+    const targetOrderPo = urlParams.get('order');
+    if (targetOrderPo) {
+        // 打开订单侧边栏
+        openOrders();
+        // 稍等片刻让 DOM 更新，然后高亮对应订单
+        setTimeout(() => {
+            highlightOrder(targetOrderPo);
+        }, 150);
     }
+
+    // 原有事件绑定等...
+    setupEventListeners();
+    applyGuestUIRestrictions();
+    updateUserModeBadge();
+}
     
     // 渲染图书列表
     function renderBooks(booksToRender) {
@@ -881,7 +902,23 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         await autoReceiveEligibleOrders(true);
     }
-
+function highlightOrder(po) {
+    const orderItems = document.querySelectorAll('#orders-items .cart-item');
+    let found = false;
+    orderItems.forEach(item => {
+        if (item.dataset.po === po) {
+            item.classList.add('order-highlight');
+            // 滚动到该卡片（平滑滚动）
+            item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            found = true;
+        } else {
+            item.classList.remove('order-highlight');
+        }
+    });
+    if (!found) {
+        showNotification('未找到对应订单', 'info');
+    }
+}
     function renderOrdersSidebar() {
         if (!ordersItemsContainer) return;
         ordersItemsContainer.innerHTML = '';
@@ -904,7 +941,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const item = document.createElement('div');
             item.className = 'cart-item';
             item.dataset.id = order.id;
-
+	item.dataset.po = order.poNumber;   // 新增：存储订单号	
             const itemsHtml = (order.items || []).length
                 ? `<ul style="margin:8px 0 0 18px;padding:0;">${order.items.map(product => `<li>${escapeHtml(product.title || '图书')} × ${Number(product.quantity || 0)}</li>`).join('')}</ul>`
                 : '<div style="margin-top:8px;color:var(--text-light);">该订单未记录商品明细</div>';
