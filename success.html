@@ -75,6 +75,10 @@
 <p class="payment-time" id="payment-time"></p>
                 <!-- 返回书店主页 -->
                 <a href="bookstore.html" class="btn btn-primary btn-home"><i class="fas fa-home"></i> 返回主页</a>
+				<!-- 新增查看订单详情按钮 -->
+	<div style="margin-top: 15px;">
+    <a href="#" class="btn btn-secondary" id="view-order-btn">查看订单详情</a>
+	</div>
                 <p class="note">订单详情已发送至您的邮箱</p>
             </div>
         </div>
@@ -86,26 +90,33 @@
         </div>
     </footer>
 
-    <script>
-        // 获取 URL 中的 total 参数
-        function getQueryParam(name) {
-            const urlParams = new URLSearchParams(window.location.search);
-            return urlParams.get(name);
-        }
-        const total = parseFloat(getQueryParam('total')) || 0;
-        document.getElementById('success-amount').textContent = '¥' + total.toFixed(2);
-		const now = new Date();
-// 获取并格式化当前时间
-const formattedTime = now.toLocaleString('zh-CN', { 
-    year: 'numeric', 
-    month: '2-digit', 
-    day: '2-digit', 
-    hour: '2-digit', 
-    minute: '2-digit', 
-    second: '2-digit', 
-    hour12: false 
-}).replace(/\//g, '-'); // 将日期分隔符从 '/' 替换为 '-'，更符合中文习惯
-document.getElementById('payment-time').textContent = '支付时间：' + formattedTime;
-    </script>
+<script>
+    // 获取 URL 参数
+    function getQueryParam(name) {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get(name);
+    }
+
+    // 显示支付金额
+    const total = parseFloat(getQueryParam('total')) || 0;
+    document.getElementById('success-amount').textContent = '¥' + total.toFixed(2);
+
+    // 显示支付时间
+    const now = new Date();
+    const formattedTime = now.toLocaleString('zh-CN', { 
+        year: 'numeric', month: '2-digit', day: '2-digit', 
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false 
+    }).replace(/\//g, '-');
+    document.getElementById('payment-time').textContent = '支付时间：' + formattedTime;
+
+    // 设置“查看订单详情”按钮链接
+    const po = getQueryParam('po');
+    const viewOrderBtn = document.getElementById('view-order-btn');
+    if (po) {
+        viewOrderBtn.href = `bookstore.html?order=${encodeURIComponent(po)}`;
+    } else {
+        viewOrderBtn.style.display = 'none'; // 无订单号时隐藏按钮
+    }
+</script>
 </body>
 </html>
