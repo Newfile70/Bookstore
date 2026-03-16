@@ -460,6 +460,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     const ordersSidebar = document.getElementById('orders-sidebar');
     const ordersItemsContainer = document.getElementById('orders-items');
     const closeOrdersBtn = document.getElementById('close-orders');
+    const orderStatusFilterElement = document.getElementById('order-status-filter');
     const ordersCountElement = document.querySelector('.orders-count');
     const historySidebar = document.getElementById('history-sidebar');
     const historyItemsContainer = document.getElementById('history-items');
@@ -932,21 +933,27 @@ function highlightOrder(po) {
         if (!ordersItemsContainer) return;
         ordersItemsContainer.innerHTML = '';
 
-        if (ordersCountElement) {
-            ordersCountElement.textContent = `${userOrders.length} 单`;
-        }
-
         if (isGuestUser()) {
             ordersItemsContainer.innerHTML = '<div class="empty-cart"><p>游客无法查看订单，请登录后使用</p></div>';
             return;
         }
 
-        if (!userOrders.length) {
-            ordersItemsContainer.innerHTML = '<div class="empty-cart"><p>暂无订单记录</p></div>';
+        const filterValue = orderStatusFilterElement ? orderStatusFilterElement.value : 'all';
+        const filteredOrders = userOrders.filter(order => {
+            if (filterValue === 'all') return true;
+            return normalizeOrderStatus(order.status) === filterValue;
+        });
+
+        if (ordersCountElement) {
+            ordersCountElement.textContent = `${filteredOrders.length} 单`;
+        }
+
+        if (!filteredOrders.length) {
+            ordersItemsContainer.innerHTML = '<div class="empty-cart"><p>暂无符合该状态的订单记录</p></div>';
             return;
         }
 
-        userOrders.forEach(order => {
+        filteredOrders.forEach(order => {
             const item = document.createElement('div');
             item.className = 'cart-item';
             item.dataset.id = order.id;
@@ -1110,6 +1117,7 @@ function highlightOrder(po) {
         if (closeCartBtn) closeCartBtn.addEventListener('click', closeCart);
         if (closeFavoritesBtn) closeFavoritesBtn.addEventListener('click', closeFavorites);
         if (closeOrdersBtn) closeOrdersBtn.addEventListener('click', closeOrders);
+        if (orderStatusFilterElement) orderStatusFilterElement.addEventListener('change', renderOrdersSidebar);
         if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', closeHistory);
         if (cartOverlay) cartOverlay.addEventListener('click', function() {
             closeCart();
