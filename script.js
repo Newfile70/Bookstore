@@ -473,6 +473,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     // 当前过滤器和购物车状态
     let currentFilter = 'all';
     let cart = loadCartFromStorage();
+    const searchFilterState = {
+        lastQuery: '',
+        baseResults: [],
+        mode: 'category-price',
+        category: 'all',
+        minPrice: '',
+        maxPrice: '',
+        selectedTags: []
+    };
     
     // 用户状态检查（若使用游客登录，请在登录流程中设置 localStorage.setItem('user', 'guest')）
     function isGuestUser() {
@@ -1291,6 +1300,7 @@ if (checkoutBtn) {
                     </div>
                     <button type="button" class="btn btn-outline" id="clear-search-results">清除搜索</button>
                 </div>
+                <div id="search-filter-panel" style="display:none;margin:0 0 24px;padding:18px;border:1px solid rgba(176,157,123,.25);border-radius:16px;background:rgba(255,248,240,.85);box-shadow:0 8px 24px rgba(0,0,0,.05);"></div>
                 <div class="books-grid search-results-grid"></div>
             </div>
         `;
@@ -1305,6 +1315,154 @@ if (checkoutBtn) {
         return section;
     }
 
+    function getSearchResultUniqueTags(resultBooks) {
+        const tagSet = new Set();
+        resultBooks.forEach(book => {
+            normalizeTextList(book.tags).forEach(tag => {
+                const normalizedTag = String(tag || '').trim();
+                if (normalizedTag) tagSet.add(normalizedTag);
+            });
+        });
+        return Array.from(tagSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+    }
+
+    function resetSearchFilters() {
+        searchFilterState.mode = 'category-price';
+        searchFilterState.category = 'all';
+        searchFilterState.minPrice = '';
+        searchFilterState.maxPrice = '';
+        searchFilterState.selectedTags = [];
+    }
+
+    function getSearchFilteredBooks() {
+        const baseResults = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults : [];
+        if (!baseResults.length) return [];
+
+        if (searchFilterState.mode === 'tags') {
+            if (!searchFilterState.selectedTags.length) return baseResults.slice();
+            return baseResults.filter(book => {
+                const bookTags = normalizeTextList(book.tags).map(tag => String(tag || '').trim().toLowerCase());
+                return searchFilterState.selectedTags.every(tag => bookTags.includes(String(tag).trim().toLowerCase()));
+            });
+        }
+
+        const minPrice = searchFilterState.minPrice === '' ? null : Number(searchFilterState.minPrice);
+        const maxPrice = searchFilterState.maxPrice === '' ? null : Number(searchFilterState.maxPrice);
+
+        return baseResults.filter(book => {
+            const bookPrice = Number(book.price || 0);
+            const categoryMatched = searchFilterState.category === 'all' || book.category === searchFilterState.category;
+            const minMatched = minPrice === null || (!Number.isNaN(minPrice) && bookPrice >= minPrice);
+            const maxMatched = maxPrice === null || (!Number.isNaN(maxPrice) && bookPrice <= maxPrice);
+            return categoryMatched && minMatched && maxMatched;
+        });
+    }
+
+    function syncSearchFilterPanel(section) {
+        if (!section) return;
+        const panel = section.querySelector('#search-filter-panel');
+        if (!panel) return;
+
+        const baseResults = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults : [];
+        if (!baseResults.length) {
+            panel.style.display = 'none';
+            panel.innerHTML = '';
+            return;
+        }
+
+        const categories = Array.from(new Set(baseResults.map(book => String(book.category || 'all')).filter(Boolean)));
+        const tags = getSearchResultUniqueTags(baseResults);
+
+        panel.style.display = 'block';
+        panel.innerHTML = `
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                <div>
+                    <div style="font-weight:700;color:#5c4937;margin-bottom:4px;">搜索筛选</div>
+                    <div style="font-size:13px;color:#7a6857;">不改动原搜索逻辑，仅对当前搜索结果做二次筛选</div>
+                </div>
+                <button type="button" class="btn btn-outline" id="reset-search-filters">重置筛选</button>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+                <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid rgba(176,157,123,.35);border-radius:999px;cursor:pointer;background:${searchFilterState.mode === 'category-price' ? 'rgba(176,157,123,.15)' : 'transparent'};">
+                    <input type="radio" name="search-filter-mode" value="category-price" ${searchFilterState.mode === 'category-price' ? 'checked' : ''}>
+                    <span>类别 + 价格范围</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid rgba(176,157,123,.35);border-radius:999px;cursor:pointer;background:${searchFilterState.mode === 'tags' ? 'rgba(176,157,123,.15)' : 'transparent'};">
+                    <input type="radio" name="search-filter-mode" value="tags" ${searchFilterState.mode === 'tags' ? 'checked' : ''}>
+                    <span>一个或多个标签</span>
+                </label>
+            </div>
+            <div id="category-price-filters" style="display:${searchFilterState.mode === 'category-price' ? 'block' : 'none'};">
+                <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+                    <label style="display:flex;flex-direction:column;gap:6px;min-width:180px;">
+                        <span style="font-size:13px;color:#6b5a49;">类别</span>
+                        <select id="search-filter-category" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
+                            <option value="all">全部类别</option>
+                            ${categories.map(category => `<option value="${escapeHtml(category)}" ${searchFilterState.category === category ? 'selected' : ''}>${escapeHtml(getCategoryName(category))}</option>`).join('')}
+                        </select>
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:6px;min-width:140px;">
+                        <span style="font-size:13px;color:#6b5a49;">最低价格</span>
+                        <input id="search-filter-min-price" type="number" min="0" step="0.01" placeholder="不限" value="${escapeHtml(searchFilterState.minPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:6px;min-width:140px;">
+                        <span style="font-size:13px;color:#6b5a49;">最高价格</span>
+                        <input id="search-filter-max-price" type="number" min="0" step="0.01" placeholder="不限" value="${escapeHtml(searchFilterState.maxPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
+                    </label>
+                </div>
+            </div>
+            <div id="tag-filters" style="display:${searchFilterState.mode === 'tags' ? 'block' : 'none'};">
+                <div style="font-size:13px;color:#6b5a49;margin-bottom:10px;">可多选标签（同时满足）</div>
+                <div style="display:flex;flex-wrap:wrap;gap:10px;">
+                    ${tags.length ? tags.map(tag => `
+                        <label style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;border:1px solid rgba(176,157,123,.35);background:${searchFilterState.selectedTags.includes(tag) ? 'rgba(176,157,123,.15)' : '#fff'};cursor:pointer;">
+                            <input type="checkbox" class="search-filter-tag" value="${escapeHtml(tag)}" ${searchFilterState.selectedTags.includes(tag) ? 'checked' : ''}>
+                            <span>${escapeHtml(tag)}</span>
+                        </label>`).join('') : '<span style="color:#7a6857;">当前结果暂无可用标签</span>'}
+                </div>
+            </div>
+        `;
+
+        panel.querySelectorAll('input[name="search-filter-mode"]').forEach(input => {
+            input.addEventListener('change', function() {
+                searchFilterState.mode = this.value;
+                renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+            });
+        });
+
+        panel.querySelector('#search-filter-category')?.addEventListener('change', function() {
+            searchFilterState.category = this.value;
+            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+        });
+
+        panel.querySelector('#search-filter-min-price')?.addEventListener('input', function() {
+            searchFilterState.minPrice = this.value.trim();
+            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+        });
+
+        panel.querySelector('#search-filter-max-price')?.addEventListener('input', function() {
+            searchFilterState.maxPrice = this.value.trim();
+            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+        });
+
+        panel.querySelectorAll('.search-filter-tag').forEach(input => {
+            input.addEventListener('change', function() {
+                const tag = this.value;
+                if (this.checked) {
+                    if (!searchFilterState.selectedTags.includes(tag)) searchFilterState.selectedTags.push(tag);
+                } else {
+                    searchFilterState.selectedTags = searchFilterState.selectedTags.filter(item => item !== tag);
+                }
+                renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+            });
+        });
+
+        panel.querySelector('#reset-search-filters')?.addEventListener('click', function() {
+            resetSearchFilters();
+            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+        });
+    }
+
     function renderSearchResults(resultBooks, rawQuery) {
         const section = ensureSearchResultsSection();
         if (!section) return;
@@ -1314,12 +1472,18 @@ if (checkoutBtn) {
         if (!grid || !summary) return;
 
         const safeQuery = escapeHtml(rawQuery);
+        const baseCount = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults.length : resultBooks.length;
+        const filterDescription = searchFilterState.mode === 'tags'
+            ? (searchFilterState.selectedTags.length ? `标签：${searchFilterState.selectedTags.join('、')}` : '标签：全部')
+            : `类别：${searchFilterState.category === 'all' ? '全部' : getCategoryName(searchFilterState.category)}，价格：${searchFilterState.minPrice || '不限'} - ${searchFilterState.maxPrice || '不限'}`;
+
         section.style.display = 'block';
+        syncSearchFilterPanel(section);
         grid.innerHTML = '';
-        summary.innerHTML = `关键词“${safeQuery}”共找到 ${resultBooks.length} 本图书。热门图书区域保留在下方，搜索结果与热门展示已分开。`;
+        summary.innerHTML = `关键词“${safeQuery}”共找到 ${baseCount} 本图书；当前筛选后显示 ${resultBooks.length} 本。<br>筛选方式：${escapeHtml(filterDescription)}。热门图书区域保留在下方，搜索结果与热门展示已分开。`;
 
         if (!resultBooks.length) {
-            grid.innerHTML = '<div class="no-results"><p>没有找到相关图书，请尝试更换关键词。</p></div>';
+            grid.innerHTML = '<div class="no-results"><p>当前筛选条件下没有匹配图书，请调整类别、价格范围或标签。</p></div>';
             section.scrollIntoView({ behavior: 'smooth', block: 'start' });
             return;
         }
@@ -1379,13 +1543,22 @@ if (checkoutBtn) {
     }
 
     function clearSearchResults() {
+        resetSearchFilters();
+        searchFilterState.lastQuery = '';
+        searchFilterState.baseResults = [];
+
         const section = document.getElementById('search-results-section');
         if (section) {
             section.style.display = 'none';
             const grid = section.querySelector('.search-results-grid');
             const summary = section.querySelector('#search-results-summary');
+            const panel = section.querySelector('#search-filter-panel');
             if (grid) grid.innerHTML = '';
             if (summary) summary.textContent = '';
+            if (panel) {
+                panel.style.display = 'none';
+                panel.innerHTML = '';
+            }
         }
         currentPage = 1;
         renderBooks(books);
@@ -1428,9 +1601,13 @@ if (checkoutBtn) {
         }).filter(item => item.score > 0)
           .sort((a, b) => b.score - a.score || Number(b.book.rating || 0) - Number(a.book.rating || 0) || Number(a.book.price || 0) - Number(b.book.price || 0));
 
-        const filteredBooks = scoredBooks.map(item => item.book);
+        searchFilterState.lastQuery = rawQuery;
+        searchFilterState.baseResults = scoredBooks.map(item => item.book);
+        resetSearchFilters();
+
+        const filteredBooks = getSearchFilteredBooks();
         renderSearchResults(filteredBooks, rawQuery);
-        showNotification(`搜索完成：找到 ${filteredBooks.length} 本相关图书，热门图书展示保持不变`, 'info');
+        showNotification(`搜索完成：找到 ${searchFilterState.baseResults.length} 本相关图书，可继续按类别价格或标签筛选`, 'info');
     }
     
     // 添加到购物车
