@@ -608,6 +608,37 @@ document.addEventListener('DOMContentLoaded', async function() {
         // 根据当前用户状态应用游客UI限制（确保按钮在初始渲染后展示为禁用）
         applyGuestUIRestrictions();
         updateUserModeBadge();
+        await handleOrderDeepLink();
+    }
+
+    async function handleOrderDeepLink() {
+        const params = new URLSearchParams(window.location.search);
+        const shouldOpenOrders = ['1', 'true', 'yes', 'y'].includes(String(params.get('openOrders') || '').toLowerCase());
+        if (!shouldOpenOrders) return;
+
+        if (isGuestUser()) {
+            showNotification('游客无法查看订单，请登录后使用', 'info');
+            return;
+        }
+
+        await loadUserOrdersFromSupabase();
+        renderOrdersSidebar();
+        openOrders();
+
+        const poNumber = String(params.get('po') || '').trim();
+        if (poNumber) {
+            const targetOrder = userOrders.find(order => String(order.poNumber || '').trim() === poNumber);
+            if (targetOrder) {
+                openOrderDetail(targetOrder.id);
+            } else {
+                showNotification('订单已创建，请在订单列表中查看最新记录', 'info');
+            }
+        }
+
+        params.delete('openOrders');
+        params.delete('po');
+        const query = params.toString();
+        window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash || ''}`);
     }
     
     // 渲染图书列表

@@ -42,6 +42,12 @@
             font-size: 18px;
             margin-top: 20px;
         }
+        .btn-order {
+            padding: 15px 40px;
+            font-size: 18px;
+            margin-top: 12px;
+            display: inline-block;
+        }
         .note {
             margin-top: 20px;
             color: var(--text-light);
@@ -73,6 +79,7 @@
                 <div class="success-amount" id="success-amount">¥0.00</div>
 <!-- 添加支付时间显示 -->
 <p class="payment-time" id="payment-time"></p>
+                <a href="bookstore.html" class="btn btn-secondary btn-order" id="view-order-btn"><i class="fas fa-receipt"></i> 查看订单详情</a>
                 <!-- 返回书店主页 -->
                 <a href="bookstore.html" class="btn btn-primary btn-home"><i class="fas fa-home"></i> 返回主页</a>
                 <p class="note">订单详情已发送至您的邮箱</p>
@@ -93,7 +100,14 @@
             return urlParams.get(name);
         }
         const total = parseFloat(getQueryParam('total')) || 0;
+        const poNumber = String(getQueryParam('po') || '').trim();
         document.getElementById('success-amount').textContent = '¥' + total.toFixed(2);
+		const orderBtn = document.getElementById('view-order-btn');
+		if (orderBtn) {
+			orderBtn.href = poNumber
+				? `bookstore.html?openOrders=1&po=${encodeURIComponent(poNumber)}`
+				: 'bookstore.html?openOrders=1';
+		}
 		const now = new Date();
 // 获取并格式化当前时间
 const formattedTime = now.toLocaleString('zh-CN', { 
