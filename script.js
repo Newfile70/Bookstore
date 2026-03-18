@@ -1,21 +1,12 @@
 // script.js - 懒得起名小书铺交互脚本
-const style = document.createElement('style');
-style.textContent = `
-    .order-highlight {
-        border: 2px solid var(--accent-color) !important;
-        background-color: rgba(196, 154, 108, 0.1) !important;
-        box-shadow: 0 0 15px rgba(196, 154, 108, 0.3) !important;
-        transition: all 0.3s ease;
-    }
-`;
-document.head.appendChild(style);
+
 document.addEventListener('DOMContentLoaded', async function() {
     let currentPage = 1;
-	
     const pageSize = 12;
     const CHECKOUT_PAYLOAD_KEY = 'bookstore_checkout_payload_v1';
     const CART_STORAGE_PREFIX = 'bookstore_cart_v1';
     const HISTORY_STORAGE_PREFIX = 'bookstore_history_v1';
+    const BOOKS_CACHE_KEY = 'bookstore_books_cache_v2';
     const ORDER_AUTO_RECEIVE_MS = 7 * 24 * 60 * 60 * 1000;
     const ORDER_STATUS_LABELS = {
         pending: '待处理',
@@ -36,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let books = [];
     let recommendations = [];
     let userOrders = [];
+    let currentOrderFilter = 'all';
     let browsingHistory = [];
     let detailGalleryAutoplayTimer = null;
     const DETAIL_GALLERY_INTERVAL_MS = 2000;
@@ -71,6 +63,79 @@ document.addEventListener('DOMContentLoaded', async function() {
         } catch {
             return fallback;
         }
+    }
+
+    function toBooleanFlag(value) {
+        if (typeof value === 'boolean') return value;
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return ['true', '1', 'yes', 'y', 'on'].includes(normalized);
+    }
+
+    function normalizeStorefrontBook(raw, index = 0) {
+        const photos = normalizePhotoList(raw?.photos ?? raw?.photo_urls ?? raw?.images ?? raw?.image_urls);
+        return {
+            photos,
+            id: raw?.id ?? raw?._id ?? index + 1,
+            title: raw?.title ?? raw?.name ?? '',
+            author: raw?.author ?? raw?.writer ?? '',
+            category: raw?.category ?? raw?.cat ?? 'all',
+            price: parseFloat(raw?.price) || 0,
+            rating: parseFloat(raw?.rating) || 0,
+            description: raw?.description ?? raw?.desc ?? '',
+            tags: normalizeTextList(raw?.tags),
+            publisher: raw?.publisher ?? '',
+            isbn: raw?.isbn ?? '',
+            disabled: toBooleanFlag(raw?.disabled),
+            color: raw?.color ?? '#b09d7b',
+            coverUrl: sanitizeImageUrl(raw?.cover_url ?? raw?.coverUrl ?? photos[0] ?? ''),
+            summaryHtml: raw?.summary_html ?? raw?.summaryHtml ?? ''
+        };
+    }
+
+    function hasBookRating(book) {
+        const rating = Number(book?.rating);
+        return Number.isFinite(rating) && rating > 0;
+    }
+
+    function formatBookRating(book, fallback = '暂无评分') {
+        return hasBookRating(book) ? Number(book.rating).toFixed(1) : fallback;
+    }
+
+    function loadCachedBooks() {
+        const cached = safeParseJsonValue(localStorage.getItem(BOOKS_CACHE_KEY), []);
+        return Array.isArray(cached) ? cached.map((book, index) => normalizeStorefrontBook(book, index)) : [];
+    }
+
+    function isBookVisible(book) {
+        return Boolean(book) && !toBooleanFlag(book.disabled);
+    }
+
+    function getVisibleBooks(source = books) {
+        return (Array.isArray(source) ? source : []).filter(isBookVisible);
+    }
+
+    function findBookById(bookId, options = {}) {
+        const includeDisabled = Boolean(options.includeDisabled);
+        const book = books.find(item => Number(item.id) === Number(bookId));
+        if (!book) return null;
+        if (!includeDisabled && !isBookVisible(book)) return null;
+        return book;
+    }
+
+    function syncCartWithVisibleBooks() {
+        const nextCart = cart.filter(item => findBookById(item.bookId));
+        if (nextCart.length === cart.length) return false;
+        cart = nextCart;
+        persistCart();
+        return true;
+    }
+
+    function syncHistoryWithVisibleBooks() {
+        const nextHistory = browsingHistory.filter(item => findBookById(item.id));
+        if (nextHistory.length === browsingHistory.length) return false;
+        browsingHistory = nextHistory;
+        persistHistory();
+        return true;
     }
 
     function normalizeUserOrder(raw, index) {
@@ -399,8 +464,21 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 从 Supabase 加载数据，如果失败则保留空数组
     async function loadDataFromSupabase() {
+        const cachedBooks = loadCachedBooks();
+        const cachedBookMap = new Map(cachedBooks.map(book => [String(book.id), book]));
+
         if (!supabaseClient) {
-            console.warn('Supabase client not found; skipping cloud load.');
+            books = cachedBooks;
+            recommendations = getVisibleBooks(books)
+                .slice()
+                .sort((a, b) => (b.rating || 0) - (a.rating || 0))
+                .slice(0, 4)
+                .map((b, i) => ({
+                    id: i + 1,
+                    bookId: b.id,
+                    reason: '基于热门与评分为您推荐'
+                }));
+            console.warn('Supabase client not found; using local cached books.');
             return;
         }
 
@@ -409,26 +487,29 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (booksError) {
                 console.error('Error loading books from Supabase:', booksError);
             } else if (booksData) {
-                // 支持数据库字段为 snake_case 或 camelCase 的情况
-                books = booksData.map(b => {
-                    const photos = normalizePhotoList(b.photos ?? b.photo_urls ?? b.images ?? b.image_urls);
-                    return {
-                        photos,
-                        id: b.id ?? b._id,
-                        title: b.title ?? b.name ?? '',
-                        author: b.author ?? b.writer ?? '',
-                        category: b.category ?? b.cat ?? 'all',
-                        price: parseFloat(b.price) || 0,
-                        rating: parseFloat(b.rating) || 0,
-                        description: b.description ?? b.desc ?? '',
-                        color: b.color ?? '#b09d7b',
-                        coverUrl: sanitizeImageUrl(b.cover_url ?? b.coverUrl ?? photos[0] ?? '')
-                    };
+                books = booksData.map((book, index) => {
+                    const normalizedBook = normalizeStorefrontBook(book, index);
+                    const cachedBook = cachedBookMap.get(String(normalizedBook.id));
+                    return normalizeStorefrontBook({
+                        ...cachedBook,
+                        ...normalizedBook,
+                        disabled: typeof book?.disabled !== 'undefined' ? book.disabled : cachedBook?.disabled ?? normalizedBook.disabled,
+                        tags: normalizedBook.tags?.length ? normalizedBook.tags : cachedBook?.tags,
+                        publisher: normalizedBook.publisher || cachedBook?.publisher,
+                        isbn: normalizedBook.isbn || cachedBook?.isbn,
+                        summary_html: normalizedBook.summaryHtml || cachedBook?.summaryHtml,
+                        photos: normalizedBook.photos?.length ? normalizedBook.photos : cachedBook?.photos,
+                        cover_url: normalizedBook.coverUrl || cachedBook?.coverUrl
+                    }, index);
                 });
             }
 
+            if (!books.length && cachedBooks.length) {
+                books = cachedBooks;
+            }
+
             // 不再请求 `recommendations` 表（避免 404）；直接根据 books 派生推荐
-            recommendations = books.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 4).map((b, i) => ({
+            recommendations = getVisibleBooks(books).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 4).map((b, i) => ({
                 id: i + 1,
                 bookId: b.id,
                 reason: '基于热门与评分为您推荐'
@@ -460,7 +541,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     const ordersSidebar = document.getElementById('orders-sidebar');
     const ordersItemsContainer = document.getElementById('orders-items');
     const closeOrdersBtn = document.getElementById('close-orders');
-    const orderStatusFilterElement = document.getElementById('order-status-filter');
     const ordersCountElement = document.querySelector('.orders-count');
     const historySidebar = document.getElementById('history-sidebar');
     const historyItemsContainer = document.getElementById('history-items');
@@ -474,15 +554,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     // 当前过滤器和购物车状态
     let currentFilter = 'all';
     let cart = loadCartFromStorage();
-    const searchFilterState = {
-        lastQuery: '',
-        baseResults: [],
-        mode: 'category-price',
-        category: 'all',
-        minPrice: '',
-        maxPrice: '',
-        selectedTags: []
-    };
     
     // 用户状态检查（若使用游客登录，请在登录流程中设置 localStorage.setItem('user', 'guest')）
     function isGuestUser() {
@@ -516,46 +587,38 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     
     // 初始化页面
-   async function initPage() {
-    // 原有加载与渲染代码...
-    await loadFavoritesFromSupabase();
-    await loadUserOrdersFromSupabase();
-    browsingHistory = loadHistoryFromStorage();
-    renderBooks(books);
-    renderRecommendations();
-    renderFavoritesSidebar();
-    renderOrdersSidebar();      // 订单侧边栏渲染完成
-    renderHistorySidebar();
-    renderCart();
-    updateCartCount();
-    calculateTotal();
+    async function initPage() {
+        await loadFavoritesFromSupabase();
+        await loadUserOrdersFromSupabase();
+        browsingHistory = loadHistoryFromStorage();
+        syncCartWithVisibleBooks();
+        syncHistoryWithVisibleBooks();
+        renderBooks(books);
+        renderRecommendations();
+        renderFavoritesSidebar();
+        renderOrdersSidebar();
+        renderHistorySidebar();
+        renderCart();
+        updateCartCount();
+        calculateTotal();
 
-    // === 新增部分：处理从支付成功页跳转过来的订单高亮 ===
-    const urlParams = new URLSearchParams(window.location.search);
-    const targetOrderPo = urlParams.get('order');
-    if (targetOrderPo) {
-        // 打开订单侧边栏
-        openOrders();
-        // 稍等片刻让 DOM 更新，然后高亮对应订单
-        setTimeout(() => {
-            highlightOrder(targetOrderPo);
-        }, 150);
+        // 添加事件监听器
+        setupEventListeners();
+
+        // 根据当前用户状态应用游客UI限制（确保按钮在初始渲染后展示为禁用）
+        applyGuestUIRestrictions();
+        updateUserModeBadge();
     }
-
-    // 原有事件绑定等...
-    setupEventListeners();
-    applyGuestUIRestrictions();
-    updateUserModeBadge();
-}
     
     // 渲染图书列表
     function renderBooks(booksToRender) {
         if (!booksGrid) return;
         booksGrid.innerHTML = '';
 
+        const visibleBooks = getVisibleBooks(booksToRender);
         const filteredBooks = currentFilter === 'all'
-            ? booksToRender
-            : booksToRender.filter(book => book.category === currentFilter);
+            ? visibleBooks
+            : visibleBooks.filter(book => book.category === currentFilter);
 
         if (filteredBooks.length === 0) {
             booksGrid.innerHTML = '<div class="no-results"><p>未找到相关图书</p></div>';
@@ -589,7 +652,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         <div class="book-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
                         <div class="book-rating">
                             <i class="fas fa-star"></i>
-                            <span>${Number(book.rating || 0).toFixed(1)}</span>
+                            <span>${formatBookRating(book)}</span>
                         </div>
                         <button class="favorite-btn ${isFavoriteBook(book.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${book.id}" ${isGuestUser() ? 'disabled' : ''}>
                             <i class="${isFavoriteBook(book.id) ? 'fas' : 'far'} fa-heart"></i>
@@ -651,7 +714,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         recommendationsGrid.innerHTML = '';
         
         recommendations.forEach(rec => {
-            const book = books.find(b => b.id === rec.bookId);
+            const book = findBookById(rec.bookId);
             if (!book) return;
             
             const recommendationCard = document.createElement('div');
@@ -669,7 +732,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <div class="book-price">¥ ${book.price.toFixed(2)}</div>
                     <div class="book-rating">
                         <i class="fas fa-star"></i>
-                        <span>${book.rating}</span>
+                        <span>${formatBookRating(book)}</span>
                     </div>
                     <button class="favorite-btn ${isFavoriteBook(book.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${book.id}" ${isGuestUser() ? 'disabled' : ''}>
                         <i class="${isFavoriteBook(book.id) ? 'fas' : 'far'} fa-heart"></i>
@@ -705,6 +768,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // 渲染购物车
     function renderCart() {
+        syncCartWithVisibleBooks();
         cartItemsContainer.innerHTML = '';
         
         if (cart.length === 0) {
@@ -713,20 +777,22 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         
         cart.forEach(item => {
-            const book = books.find(b => b.id === item.bookId);
+            const book = findBookById(item.bookId);
             if (!book) return;
+            const coverUrl = getBookBrowseCoverUrl(book);
             
             const cartItem = document.createElement('div');
             cartItem.className = 'cart-item';
             cartItem.dataset.id = item.id;
             
             cartItem.innerHTML = `
-                <div class="cart-item-image" style="background-color: ${book.color}">
-                    <span style="color: white; font-size: 12px; padding: 5px;">${book.title.substring(0, 6)}...</span>
+                <div class="cart-item-image cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" aria-label="查看《${escapeHtml(book.title || '未命名图书')}》详情" style="${getBookBrowseCoverStyle(book)}">
+                    ${coverUrl ? '' : `<span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((book.title || '图书').substring(0, 6))}...</span>`}
                 </div>
                 <div class="cart-item-details">
-                    <h4 class="cart-item-title">${book.title}</h4>
-                    <p class="cart-item-author">${book.author}</p>
+                    <h4 class="cart-item-title cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(book.title || '未命名图书')}</h4>
+                    <p class="cart-item-author cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(book.author || '未知作者')}</p>
+                    <div class="cart-item-meta cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" style="font-size:12px;color:var(--text-light);margin-bottom:8px;">点击查看详情</div>
                     <div class="cart-item-controls">
                         <div class="cart-item-quantity">
                             <button class="quantity-btn decrease-quantity" data-id="${item.id}">-</button>
@@ -765,12 +831,27 @@ document.addEventListener('DOMContentLoaded', async function() {
                 removeFromCart(itemId);
             });
         });
+
+        cartItemsContainer.querySelectorAll('.cart-open-detail').forEach(node => {
+            node.addEventListener('click', function() {
+                const bookId = Number(this.dataset.bookId);
+                if (!bookId) return;
+                openBookDetail(bookId);
+            });
+            node.addEventListener('keydown', function(e) {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                const bookId = Number(this.dataset.bookId);
+                if (!bookId) return;
+                openBookDetail(bookId);
+            });
+        });
     }
 
     function renderFavoritesSidebar() {
         if (!favoritesItemsContainer) return;
 
-        const favoriteBooks = books.filter(book => isFavoriteBook(book.id));
+        const favoriteBooks = getVisibleBooks(books).filter(book => isFavoriteBook(book.id));
         favoritesItemsContainer.innerHTML = '';
 
         if (favoritesCountElement) {
@@ -912,44 +993,60 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         await autoReceiveEligibleOrders(true);
     }
-function highlightOrder(po) {
-    const orderItems = document.querySelectorAll('#orders-items .cart-item');
-    let found = false;
-    orderItems.forEach(item => {
-        if (item.dataset.po === po) {
-            item.classList.add('order-highlight');
-            // 滚动到该卡片（平滑滚动）
-            item.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            found = true;
-        } else {
-            item.classList.remove('order-highlight');
-        }
-    });
-    if (!found) {
-        showNotification('未找到对应订单', 'info');
+
+    function getFilteredUserOrders(status = currentOrderFilter) {
+        const normalized = String(status || 'all').trim().toLowerCase();
+        if (normalized === 'all') return [...userOrders];
+        return userOrders.filter(order => normalizeOrderStatus(order.status) === normalized);
     }
-}
+
     function renderOrdersSidebar() {
         if (!ordersItemsContainer) return;
         ordersItemsContainer.innerHTML = '';
 
+        const filterBar = document.createElement('div');
+        filterBar.className = 'orders-filter-bar';
+        filterBar.innerHTML = `
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'all' ? 'active' : ''}" data-status="all">全部</button>
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'pending' ? 'active' : ''}" data-status="pending">待处理</button>
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'hold' ? 'active' : ''}" data-status="hold">暂缓</button>
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'shipped' ? 'active' : ''}" data-status="shipped">已发货</button>
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'arrived' ? 'active' : ''}" data-status="arrived">已到货</button>
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'received' ? 'active' : ''}" data-status="received">已收货</button>
+            <button type="button" class="orders-filter-btn ${currentOrderFilter === 'cancelled' ? 'active' : ''}" data-status="cancelled">已取消</button>
+        `;
+
+        if (ordersCountElement) {
+            ordersCountElement.textContent = `${userOrders.length} 单`;
+        }
+
         if (isGuestUser()) {
-            ordersItemsContainer.innerHTML = '<div class="empty-cart"><p>游客无法查看订单，请登录后使用</p></div>';
+            ordersItemsContainer.appendChild(filterBar);
+            const guestEmpty = document.createElement('div');
+            guestEmpty.className = 'empty-cart';
+            guestEmpty.innerHTML = '<p>游客无法查看订单，请登录后使用</p>';
+            ordersItemsContainer.appendChild(guestEmpty);
             return;
         }
 
-        const filterValue = orderStatusFilterElement ? orderStatusFilterElement.value : 'all';
-        const filteredOrders = userOrders.filter(order => {
-            if (filterValue === 'all') return true;
-            return normalizeOrderStatus(order.status) === filterValue;
-        });
+        ordersItemsContainer.appendChild(filterBar);
 
-        if (ordersCountElement) {
-            ordersCountElement.textContent = `${filteredOrders.length} 单`;
+        if (!userOrders.length) {
+            const empty = document.createElement('div');
+            empty.className = 'empty-cart';
+            empty.innerHTML = '<p>暂无订单记录</p>';
+            ordersItemsContainer.appendChild(empty);
+            bindOrdersFilterButtons();
+            return;
         }
 
+        const filteredOrders = getFilteredUserOrders();
         if (!filteredOrders.length) {
-            ordersItemsContainer.innerHTML = '<div class="empty-cart"><p>暂无符合该状态的订单记录</p></div>';
+            const empty = document.createElement('div');
+            empty.className = 'empty-cart';
+            empty.innerHTML = '<p>当前状态下暂无订单</p>';
+            ordersItemsContainer.appendChild(empty);
+            bindOrdersFilterButtons();
             return;
         }
 
@@ -957,7 +1054,7 @@ function highlightOrder(po) {
             const item = document.createElement('div');
             item.className = 'cart-item';
             item.dataset.id = order.id;
-	item.dataset.po = order.poNumber;   // 新增：存储订单号	
+
             const itemsHtml = (order.items || []).length
                 ? `<ul style="margin:8px 0 0 18px;padding:0;">${order.items.map(product => `<li>${escapeHtml(product.title || '图书')} × ${Number(product.quantity || 0)}</li>`).join('')}</ul>`
                 : '<div style="margin-top:8px;color:var(--text-light);">该订单未记录商品明细</div>';
@@ -965,7 +1062,7 @@ function highlightOrder(po) {
             const remainingText = getOrderRemainingText(order);
 
             item.innerHTML = `
-                <div class="cart-item-details" style="width:100%;">
+                <div class="cart-item-details order-open-detail" data-order-id="${order.id}" role="button" tabindex="0" style="width:100%;cursor:pointer;">
                     <h4 class="cart-item-title">订单号：${escapeHtml(order.poNumber || String(order.id))}</h4>
                     <p class="cart-item-author">状态：${escapeHtml(ORDER_STATUS_LABELS[normalizeOrderStatus(order.status)] || order.status)}</p>
                     <div style="font-size:13px;color:var(--text-light);line-height:1.8;">
@@ -977,6 +1074,7 @@ function highlightOrder(po) {
                         <div>收货时间：${escapeHtml(formatOrderDate(order.receivedDate))}</div>
                         ${remainingText ? `<div style="color:#8b5e3c;">${escapeHtml(remainingText)}</div>` : ''}
                     </div>
+                    <div style="margin-top:8px;font-size:12px;color:#8b5e3c;">点击查看订单详情</div>
                     ${itemsHtml}
                     ${canReceive ? `<div class="cart-item-controls" style="margin-top:10px;justify-content:flex-end;"><button class="btn btn-primary btn-confirm-received" data-id="${order.id}">已收货</button></div>` : ''}
                 </div>
@@ -985,8 +1083,11 @@ function highlightOrder(po) {
             ordersItemsContainer.appendChild(item);
         });
 
+        bindOrdersFilterButtons();
+
         ordersItemsContainer.querySelectorAll('.btn-confirm-received').forEach(button => {
-            button.addEventListener('click', async function() {
+            button.addEventListener('click', async function(e) {
+                e.stopPropagation();
                 const orderId = this.dataset.id;
                 const result = await syncOrderStatusToCloud(orderId, 'received');
                 if (!result.ok) {
@@ -1003,10 +1104,130 @@ function highlightOrder(po) {
                 showNotification('已确认收货，订单状态已同步更新', 'success');
             });
         });
+
+        ordersItemsContainer.querySelectorAll('.order-open-detail').forEach(node => {
+            node.addEventListener('click', function(e) {
+                if (e.target.closest('.btn-confirm-received')) return;
+                openOrderDetail(this.dataset.orderId);
+            });
+            node.addEventListener('keydown', function(e) {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                openOrderDetail(this.dataset.orderId);
+            });
+        });
+    }
+
+    function bindOrdersFilterButtons() {
+        ordersItemsContainer.querySelectorAll('.orders-filter-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                currentOrderFilter = this.dataset.status || 'all';
+                renderOrdersSidebar();
+            });
+        });
+    }
+
+    function ensureOrderDetailModal() {
+        let modal = document.getElementById('order-detail-modal');
+        if (modal) return modal;
+
+        modal = document.createElement('div');
+        modal.id = 'order-detail-modal';
+        modal.className = 'order-detail-modal';
+        modal.innerHTML = `
+            <div class="order-detail-overlay" data-role="close-order-detail"></div>
+            <div class="order-detail-panel" role="dialog" aria-modal="true" aria-labelledby="order-detail-title">
+                <button type="button" class="order-detail-close" data-role="close-order-detail" aria-label="关闭订单详情">
+                    <i class="fas fa-times"></i>
+                </button>
+                <div class="order-detail-body"></div>
+            </div>
+        `;
+
+        modal.addEventListener('click', function(e) {
+            if (e.target.closest('[data-role="close-order-detail"]')) {
+                closeOrderDetail();
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modal.classList.contains('active')) {
+                closeOrderDetail();
+            }
+        });
+
+        document.body.appendChild(modal);
+        return modal;
+    }
+
+    function closeOrderDetail() {
+        const modal = document.getElementById('order-detail-modal');
+        if (!modal) return;
+        modal.classList.remove('active');
+        document.body.classList.remove('detail-open');
+    }
+
+    function openOrderDetail(orderId) {
+        const order = userOrders.find(item => String(item.id) === String(orderId));
+        if (!order) {
+            showNotification('未找到该订单详情', 'info');
+            return;
+        }
+
+        const modal = ensureOrderDetailModal();
+        const body = modal.querySelector('.order-detail-body');
+        if (!body) return;
+
+        const statusLabel = ORDER_STATUS_LABELS[normalizeOrderStatus(order.status)] || order.status;
+        const remainingText = getOrderRemainingText(order);
+        const items = Array.isArray(order.items) ? order.items : [];
+
+        body.innerHTML = `
+            <div class="order-detail-header">
+                <span class="book-detail-category">订单详情</span>
+                <h2 id="order-detail-title" class="book-detail-title">订单号：${escapeHtml(order.poNumber || String(order.id))}</h2>
+                <p class="book-detail-author">收件人：${escapeHtml(order.customerName || '用户')}</p>
+                <div class="book-detail-rating-row">
+                    <span class="book-detail-price">¥ ${Number(order.totalAmount || 0).toFixed(2)}</span>
+                    <span class="book-detail-rating"><i class="fas fa-box"></i> ${escapeHtml(statusLabel)}</span>
+                </div>
+                ${remainingText ? `<p class="book-detail-description" style="color:#8b5e3c;">${escapeHtml(remainingText)}</p>` : ''}
+            </div>
+            <div class="book-detail-section">
+                <h3>订单信息</h3>
+                <div class="book-detail-meta-grid">
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">下单时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.purchaseDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">支付方式</span><strong class="book-detail-meta-value">${escapeHtml(order.paymentMethod || '未记录')}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">发货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.shipmentDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">到货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.arrivedDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">收货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.receivedDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">收货地址</span><strong class="book-detail-meta-value">${escapeHtml(order.shippingAddress || '-')}</strong></div>
+                </div>
+            </div>
+            <div class="book-detail-section">
+                <h3>商品明细</h3>
+                ${items.length ? `
+                    <div class="order-detail-items">
+                        ${items.map(product => `
+                            <div class="order-detail-item">
+                                <strong>${escapeHtml(product.title || '图书')}</strong>
+                                <span>数量：${Number(product.quantity || 0)}</span>
+                                <span>单价：¥ ${Number(product.price || 0).toFixed(2)}</span>
+                                <span>小计：¥ ${Number(product.subtotal ?? (Number(product.price || 0) * Number(product.quantity || 0))).toFixed(2)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : '<p class="book-detail-description">该订单未记录商品明细。</p>'}
+            </div>
+        `;
+
+        modal.classList.add('active');
+        document.body.classList.add('detail-open');
     }
 
     function renderHistorySidebar() {
         if (!historyItemsContainer) return;
+        syncHistoryWithVisibleBooks();
         historyItemsContainer.innerHTML = '';
 
         if (historyCountElement) {
@@ -1117,7 +1338,6 @@ function highlightOrder(po) {
         if (closeCartBtn) closeCartBtn.addEventListener('click', closeCart);
         if (closeFavoritesBtn) closeFavoritesBtn.addEventListener('click', closeFavorites);
         if (closeOrdersBtn) closeOrdersBtn.addEventListener('click', closeOrders);
-        if (orderStatusFilterElement) orderStatusFilterElement.addEventListener('change', renderOrdersSidebar);
         if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', closeHistory);
         if (cartOverlay) cartOverlay.addEventListener('click', function() {
             closeCart();
@@ -1251,7 +1471,7 @@ if (checkoutBtn) {
         }
 
         const checkoutItems = cart.map(item => {
-            const book = books.find(b => Number(b.id) === Number(item.bookId));
+            const book = findBookById(item.bookId);
             if (!book) return null;
             const quantity = Number(item.quantity) || 0;
             const price = Number(book.price) || 0;
@@ -1308,7 +1528,6 @@ if (checkoutBtn) {
                     </div>
                     <button type="button" class="btn btn-outline" id="clear-search-results">清除搜索</button>
                 </div>
-                <div id="search-filter-panel" style="display:none;margin:0 0 24px;padding:18px;border:1px solid rgba(176,157,123,.25);border-radius:16px;background:rgba(255,248,240,.85);box-shadow:0 8px 24px rgba(0,0,0,.05);"></div>
                 <div class="books-grid search-results-grid"></div>
             </div>
         `;
@@ -1323,154 +1542,6 @@ if (checkoutBtn) {
         return section;
     }
 
-    function getSearchResultUniqueTags(resultBooks) {
-        const tagSet = new Set();
-        resultBooks.forEach(book => {
-            normalizeTextList(book.tags).forEach(tag => {
-                const normalizedTag = String(tag || '').trim();
-                if (normalizedTag) tagSet.add(normalizedTag);
-            });
-        });
-        return Array.from(tagSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
-    }
-
-    function resetSearchFilters() {
-        searchFilterState.mode = 'category-price';
-        searchFilterState.category = 'all';
-        searchFilterState.minPrice = '';
-        searchFilterState.maxPrice = '';
-        searchFilterState.selectedTags = [];
-    }
-
-    function getSearchFilteredBooks() {
-        const baseResults = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults : [];
-        if (!baseResults.length) return [];
-
-        if (searchFilterState.mode === 'tags') {
-            if (!searchFilterState.selectedTags.length) return baseResults.slice();
-            return baseResults.filter(book => {
-                const bookTags = normalizeTextList(book.tags).map(tag => String(tag || '').trim().toLowerCase());
-                return searchFilterState.selectedTags.every(tag => bookTags.includes(String(tag).trim().toLowerCase()));
-            });
-        }
-
-        const minPrice = searchFilterState.minPrice === '' ? null : Number(searchFilterState.minPrice);
-        const maxPrice = searchFilterState.maxPrice === '' ? null : Number(searchFilterState.maxPrice);
-
-        return baseResults.filter(book => {
-            const bookPrice = Number(book.price || 0);
-            const categoryMatched = searchFilterState.category === 'all' || book.category === searchFilterState.category;
-            const minMatched = minPrice === null || (!Number.isNaN(minPrice) && bookPrice >= minPrice);
-            const maxMatched = maxPrice === null || (!Number.isNaN(maxPrice) && bookPrice <= maxPrice);
-            return categoryMatched && minMatched && maxMatched;
-        });
-    }
-
-    function syncSearchFilterPanel(section) {
-        if (!section) return;
-        const panel = section.querySelector('#search-filter-panel');
-        if (!panel) return;
-
-        const baseResults = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults : [];
-        if (!baseResults.length) {
-            panel.style.display = 'none';
-            panel.innerHTML = '';
-            return;
-        }
-
-        const categories = Array.from(new Set(baseResults.map(book => String(book.category || 'all')).filter(Boolean)));
-        const tags = getSearchResultUniqueTags(baseResults);
-
-        panel.style.display = 'block';
-        panel.innerHTML = `
-            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px;">
-                <div>
-                    <div style="font-weight:700;color:#5c4937;margin-bottom:4px;">搜索筛选</div>
-                    <div style="font-size:13px;color:#7a6857;">不改动原搜索逻辑，仅对当前搜索结果做二次筛选</div>
-                </div>
-                <button type="button" class="btn btn-outline" id="reset-search-filters">重置筛选</button>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
-                <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid rgba(176,157,123,.35);border-radius:999px;cursor:pointer;background:${searchFilterState.mode === 'category-price' ? 'rgba(176,157,123,.15)' : 'transparent'};">
-                    <input type="radio" name="search-filter-mode" value="category-price" ${searchFilterState.mode === 'category-price' ? 'checked' : ''}>
-                    <span>类别 + 价格范围</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid rgba(176,157,123,.35);border-radius:999px;cursor:pointer;background:${searchFilterState.mode === 'tags' ? 'rgba(176,157,123,.15)' : 'transparent'};">
-                    <input type="radio" name="search-filter-mode" value="tags" ${searchFilterState.mode === 'tags' ? 'checked' : ''}>
-                    <span>一个或多个标签</span>
-                </label>
-            </div>
-            <div id="category-price-filters" style="display:${searchFilterState.mode === 'category-price' ? 'block' : 'none'};">
-                <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
-                    <label style="display:flex;flex-direction:column;gap:6px;min-width:180px;">
-                        <span style="font-size:13px;color:#6b5a49;">类别</span>
-                        <select id="search-filter-category" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
-                            <option value="all">全部类别</option>
-                            ${categories.map(category => `<option value="${escapeHtml(category)}" ${searchFilterState.category === category ? 'selected' : ''}>${escapeHtml(getCategoryName(category))}</option>`).join('')}
-                        </select>
-                    </label>
-                    <label style="display:flex;flex-direction:column;gap:6px;min-width:140px;">
-                        <span style="font-size:13px;color:#6b5a49;">最低价格</span>
-                        <input id="search-filter-min-price" type="number" min="0" step="0.01" placeholder="不限" value="${escapeHtml(searchFilterState.minPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
-                    </label>
-                    <label style="display:flex;flex-direction:column;gap:6px;min-width:140px;">
-                        <span style="font-size:13px;color:#6b5a49;">最高价格</span>
-                        <input id="search-filter-max-price" type="number" min="0" step="0.01" placeholder="不限" value="${escapeHtml(searchFilterState.maxPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
-                    </label>
-                </div>
-            </div>
-            <div id="tag-filters" style="display:${searchFilterState.mode === 'tags' ? 'block' : 'none'};">
-                <div style="font-size:13px;color:#6b5a49;margin-bottom:10px;">可多选标签（同时满足）</div>
-                <div style="display:flex;flex-wrap:wrap;gap:10px;">
-                    ${tags.length ? tags.map(tag => `
-                        <label style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;border:1px solid rgba(176,157,123,.35);background:${searchFilterState.selectedTags.includes(tag) ? 'rgba(176,157,123,.15)' : '#fff'};cursor:pointer;">
-                            <input type="checkbox" class="search-filter-tag" value="${escapeHtml(tag)}" ${searchFilterState.selectedTags.includes(tag) ? 'checked' : ''}>
-                            <span>${escapeHtml(tag)}</span>
-                        </label>`).join('') : '<span style="color:#7a6857;">当前结果暂无可用标签</span>'}
-                </div>
-            </div>
-        `;
-
-        panel.querySelectorAll('input[name="search-filter-mode"]').forEach(input => {
-            input.addEventListener('change', function() {
-                searchFilterState.mode = this.value;
-                renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
-            });
-        });
-
-        panel.querySelector('#search-filter-category')?.addEventListener('change', function() {
-            searchFilterState.category = this.value;
-            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
-        });
-
-        panel.querySelector('#search-filter-min-price')?.addEventListener('input', function() {
-            searchFilterState.minPrice = this.value.trim();
-            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
-        });
-
-        panel.querySelector('#search-filter-max-price')?.addEventListener('input', function() {
-            searchFilterState.maxPrice = this.value.trim();
-            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
-        });
-
-        panel.querySelectorAll('.search-filter-tag').forEach(input => {
-            input.addEventListener('change', function() {
-                const tag = this.value;
-                if (this.checked) {
-                    if (!searchFilterState.selectedTags.includes(tag)) searchFilterState.selectedTags.push(tag);
-                } else {
-                    searchFilterState.selectedTags = searchFilterState.selectedTags.filter(item => item !== tag);
-                }
-                renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
-            });
-        });
-
-        panel.querySelector('#reset-search-filters')?.addEventListener('click', function() {
-            resetSearchFilters();
-            renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
-        });
-    }
-
     function renderSearchResults(resultBooks, rawQuery) {
         const section = ensureSearchResultsSection();
         if (!section) return;
@@ -1480,23 +1551,18 @@ if (checkoutBtn) {
         if (!grid || !summary) return;
 
         const safeQuery = escapeHtml(rawQuery);
-        const baseCount = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults.length : resultBooks.length;
-        const filterDescription = searchFilterState.mode === 'tags'
-            ? (searchFilterState.selectedTags.length ? `标签：${searchFilterState.selectedTags.join('、')}` : '标签：全部')
-            : `类别：${searchFilterState.category === 'all' ? '全部' : getCategoryName(searchFilterState.category)}，价格：${searchFilterState.minPrice || '不限'} - ${searchFilterState.maxPrice || '不限'}`;
-
+        const visibleResults = getVisibleBooks(resultBooks);
         section.style.display = 'block';
-        syncSearchFilterPanel(section);
         grid.innerHTML = '';
-        summary.innerHTML = `关键词“${safeQuery}”共找到 ${baseCount} 本图书；当前筛选后显示 ${resultBooks.length} 本。<br>筛选方式：${escapeHtml(filterDescription)}。热门图书区域保留在下方，搜索结果与热门展示已分开。`;
+        summary.innerHTML = `关键词“${safeQuery}”共找到 ${visibleResults.length} 本图书。热门图书区域保留在下方，搜索结果与热门展示已分开。`;
 
-        if (!resultBooks.length) {
-            grid.innerHTML = '<div class="no-results"><p>当前筛选条件下没有匹配图书，请调整类别、价格范围或标签。</p></div>';
+        if (!visibleResults.length) {
+            grid.innerHTML = '<div class="no-results"><p>没有找到相关图书，请尝试更换关键词。</p></div>';
             section.scrollIntoView({ behavior: 'smooth', block: 'start' });
             return;
         }
 
-        resultBooks.forEach(book => {
+        visibleResults.forEach(book => {
             const bookCard = document.createElement('div');
             bookCard.className = 'book-card';
             bookCard.dataset.id = book.id;
@@ -1516,7 +1582,7 @@ if (checkoutBtn) {
                         <div class="book-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
                         <div class="book-rating">
                             <i class="fas fa-star"></i>
-                            <span>${Number(book.rating || 0).toFixed(1)}</span>
+                            <span>${formatBookRating(book)}</span>
                         </div>
                         <button class="favorite-btn ${isFavoriteBook(book.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(book.id)}" ${isGuestUser() ? 'disabled' : ''}>
                             <i class="${isFavoriteBook(book.id) ? 'fas' : 'far'} fa-heart"></i>
@@ -1551,22 +1617,13 @@ if (checkoutBtn) {
     }
 
     function clearSearchResults() {
-        resetSearchFilters();
-        searchFilterState.lastQuery = '';
-        searchFilterState.baseResults = [];
-
         const section = document.getElementById('search-results-section');
         if (section) {
             section.style.display = 'none';
             const grid = section.querySelector('.search-results-grid');
             const summary = section.querySelector('#search-results-summary');
-            const panel = section.querySelector('#search-filter-panel');
             if (grid) grid.innerHTML = '';
             if (summary) summary.textContent = '';
-            if (panel) {
-                panel.style.display = 'none';
-                panel.innerHTML = '';
-            }
         }
         currentPage = 1;
         renderBooks(books);
@@ -1584,7 +1641,7 @@ if (checkoutBtn) {
         }
 
         const keywords = query.split(/\s+/).filter(Boolean);
-        const scoredBooks = books.map(book => {
+        const scoredBooks = getVisibleBooks(books).map(book => {
             const fields = [
                 book.title,
                 book.author,
@@ -1609,13 +1666,9 @@ if (checkoutBtn) {
         }).filter(item => item.score > 0)
           .sort((a, b) => b.score - a.score || Number(b.book.rating || 0) - Number(a.book.rating || 0) || Number(a.book.price || 0) - Number(b.book.price || 0));
 
-        searchFilterState.lastQuery = rawQuery;
-        searchFilterState.baseResults = scoredBooks.map(item => item.book);
-        resetSearchFilters();
-
-        const filteredBooks = getSearchFilteredBooks();
+        const filteredBooks = scoredBooks.map(item => item.book);
         renderSearchResults(filteredBooks, rawQuery);
-        showNotification(`搜索完成：找到 ${searchFilterState.baseResults.length} 本相关图书，可继续按类别价格或标签筛选`, 'info');
+        showNotification(`搜索完成：找到 ${filteredBooks.length} 本相关图书，热门图书展示保持不变`, 'info');
     }
     
     // 添加到购物车
@@ -1624,8 +1677,11 @@ if (checkoutBtn) {
             showNotification('游客无法使用购物车，请登录后操作', 'info');
             return;
         }
-        const book = books.find(b => b.id === bookId);
-        if (!book) return;
+        const book = findBookById(bookId);
+        if (!book) {
+            showNotification('该图书已下架，暂时无法加入购物车', 'info');
+            return;
+        }
         
         // 检查是否已在购物车中
         const existingItem = cart.find(item => item.bookId === bookId);
@@ -1683,7 +1739,7 @@ if (checkoutBtn) {
         const itemIndex = cart.findIndex(i => i.id === itemId);
         if (itemIndex === -1) return;
         
-        const book = books.find(b => b.id === cart[itemIndex].bookId);
+        const book = findBookById(cart[itemIndex].bookId, { includeDisabled: true });
         cart.splice(itemIndex, 1);
         persistCart();
         
@@ -1698,6 +1754,7 @@ if (checkoutBtn) {
     
     // 更新购物车数量显示
     function updateCartCount() {
+        syncCartWithVisibleBooks();
         const totalItems = cart.reduce((total, item) => total + item.quantity, 0);
         cartCount.textContent = totalItems;
         cartCount.style.display = totalItems > 0 ? 'flex' : 'none';
@@ -1705,8 +1762,9 @@ if (checkoutBtn) {
     
     // 计算购物车总价
     function calculateTotal() {
+        syncCartWithVisibleBooks();
         const total = cart.reduce((sum, item) => {
-            const book = books.find(b => b.id === item.bookId);
+            const book = findBookById(item.bookId);
             return sum + (book ? book.price * item.quantity : 0);
         }, 0);
         
@@ -1921,7 +1979,7 @@ if (checkoutBtn) {
 
     function getBookCoverUrl(book) {
         const defaultCover = createDefaultCoverImage(book);
-        const candidates = [defaultCover, book?.coverUrl, ...(Array.isArray(book?.photos) ? book.photos : [])];
+        const candidates = [book?.coverUrl, ...(Array.isArray(book?.photos) ? book.photos : []), defaultCover];
         for (const candidate of candidates) {
             const url = sanitizeImageUrl(candidate);
             if (url) return url;
@@ -1933,8 +1991,6 @@ if (checkoutBtn) {
         const seen = new Set();
         const urls = [];
         const defaultCover = createDefaultCoverImage(book);
-        urls.push(defaultCover);
-        seen.add(defaultCover);
         const candidates = [book?.coverUrl, ...(Array.isArray(book?.photos) ? book.photos : [])];
         candidates.forEach(candidate => {
             const url = sanitizeImageUrl(candidate);
@@ -1942,11 +1998,15 @@ if (checkoutBtn) {
             seen.add(url);
             urls.push(url);
         });
+        if (!urls.length) {
+            urls.push(defaultCover);
+            seen.add(defaultCover);
+        }
         return urls;
     }
 
     function getBookBrowseCoverUrl(book) {
-        return createDefaultCoverImage(book);
+        return getBookCoverUrl(book);
     }
 
     function getBookBrowseCoverStyle(book) {
@@ -1999,7 +2059,7 @@ if (checkoutBtn) {
         const rows = [
             { label: '图书分类', value: getCategoryName(book.category) },
             { label: '作者', value: book.author || '未知作者' },
-            { label: '评分', value: `${Number(book.rating || 0).toFixed(1)} / 5.0` },
+            { label: '评分', value: hasBookRating(book) ? `${formatBookRating(book)} / 5.0` : '暂无评分' },
             { label: '价格', value: `¥ ${Number(book.price || 0).toFixed(2)}` }
         ];
 
@@ -2012,7 +2072,7 @@ if (checkoutBtn) {
     }
 
     function openBookDetail(bookId) {
-        const book = books.find(b => Number(b.id) === Number(bookId));
+        const book = findBookById(bookId);
         if (!book) {
             showNotification('未找到该图书详情', 'info');
             return;
@@ -2063,7 +2123,7 @@ if (checkoutBtn) {
                     <p class="book-detail-author">作者：${escapeHtml(book.author || '未知作者')}</p>
                     <div class="book-detail-rating-row">
                         <span class="book-detail-price">¥ ${Number(book.price || 0).toFixed(2)}</span>
-                        <span class="book-detail-rating"><i class="fas fa-star"></i> ${Number(book.rating || 0).toFixed(1)}</span>
+                        <span class="book-detail-rating"><i class="fas fa-star"></i> ${formatBookRating(book)}</span>
                     </div>
                     <p class="book-detail-description">${escapeHtml(String(book.description || '暂无简介').replace(/<[^>]+>/g, ''))}</p>
                     <div class="book-detail-actions">
@@ -2085,7 +2145,7 @@ if (checkoutBtn) {
                 <h3>内容亮点</h3>
                 <ul class="book-detail-highlights">
                     <li>适合喜欢「${escapeHtml(getCategoryName(book.category))}」内容的读者。</li>
-                    <li>当前读者评分为 ${Number(book.rating || 0).toFixed(1)}，具有较高参考价值。</li>
+                    <li>${hasBookRating(book) ? `当前读者评分为 ${formatBookRating(book)}，可作为选购参考。` : '当前暂无买家评分，欢迎首位读者完成购买后评价。'}</li>
                     <li>页面支持直接加入购物车，无需返回列表页。</li>
                 </ul>
             </div>
@@ -2449,8 +2509,96 @@ if (checkoutBtn) {
             font-size: 14px;
         }
 
+        .orders-filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .orders-filter-btn {
+            border: 1px solid rgba(140, 90, 48, 0.18);
+            background: #fff;
+            color: #8c5a30;
+            border-radius: 999px;
+            padding: 6px 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .orders-filter-btn.active,
+        .orders-filter-btn:hover {
+            background: rgba(140, 90, 48, 0.12);
+            border-color: rgba(140, 90, 48, 0.38);
+        }
+
+        .order-detail-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 3200;
+            display: none;
+        }
+
+        .order-detail-modal.active {
+            display: block;
+        }
+
+        .order-detail-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(2px);
+        }
+
+        .order-detail-panel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(880px, calc(100% - 32px));
+            max-height: calc(100vh - 48px);
+            overflow-y: auto;
+            background: #fffdf8;
+            border-radius: 24px;
+            box-shadow: 0 24px 80px rgba(15, 23, 42, 0.18);
+            padding: 32px;
+        }
+
+        .order-detail-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(15, 23, 42, 0.06);
+            cursor: pointer;
+        }
+
+        .order-detail-items {
+            display: grid;
+            gap: 12px;
+        }
+
+        .order-detail-item {
+            display: grid;
+            gap: 6px;
+            padding: 16px;
+            border-radius: 16px;
+            background: #fff;
+            border: 1px solid rgba(15, 23, 42, 0.06);
+            color: #4b5563;
+        }
+
         @media (max-width: 768px) {
             .book-detail-panel {
+                width: calc(100% - 20px);
+                padding: 24px 18px;
+                max-height: calc(100vh - 20px);
+            }
+
+            .order-detail-panel {
                 width: calc(100% - 20px);
                 padding: 24px 18px;
                 max-height: calc(100vh - 20px);

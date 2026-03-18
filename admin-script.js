@@ -218,7 +218,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             author: raw.author ?? '未知作者',
             category: raw.category ?? 'all',
             price: Number.parseFloat(raw.price) || 0,
-            rating: Number.parseFloat(raw.rating) || 4.5,
+            rating: Number.parseFloat(raw.rating) || 0,
             description: raw.description ?? '暂无简介',
             summaryHtml: sanitizeSummaryHtml(raw.summary_html || raw.summaryHtml || `<p>${raw.description ?? '暂无简介'}</p>`),
             publisher: raw.publisher || '未知出版社',
@@ -362,9 +362,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <input id="product-title" type="text" placeholder="标题">
                     <input id="product-author" type="text" placeholder="作者">
                     <input id="product-price" type="number" step="0.01" placeholder="价格">
-                    <input id="product-rating" type="number" min="0" max="5" step="0.1" placeholder="评分">
                     <input id="product-publisher" type="text" placeholder="出版社">
                     <input id="product-isbn" type="text" placeholder="ISBN">
+                    <div class="full empty-state" style="padding:12px 14px;box-shadow:none;">评分由买家评价后自动生成，新上架商品默认显示“暂无评分”。</div>
                     <input id="product-tags" class="full" type="text" placeholder="标签（逗号分隔）">
                     <textarea id="product-description" class="full" rows="3" placeholder="简短描述"></textarea>
                     <textarea id="product-summary-html" class="full" rows="4" placeholder="支持 HTML 的详情介绍"></textarea>
@@ -507,36 +507,41 @@ document.addEventListener('DOMContentLoaded', async () => {
         textarea.value = editingPhotos.join('\n');
         grid.innerHTML = '';
 
-        const defaultItem = document.createElement('div');
-        defaultItem.className = 'photo-preview-item';
-
-        const defaultImg = document.createElement('img');
-        defaultImg.alt = '系统默认封面';
-        defaultImg.src = createPlaceholderSvg(getDefaultCoverLabel());
-
-        const defaultText = document.createElement('div');
-        defaultText.style.fontSize = '12px';
-        defaultText.style.wordBreak = 'break-all';
-        defaultText.textContent = '系统默认封面（保留显示，不写入图片列表）';
-
-        const defaultBadge = document.createElement('button');
-        defaultBadge.type = 'button';
-        defaultBadge.className = 'btn btn-outline remove-photo-btn';
-        defaultBadge.disabled = true;
-        defaultBadge.textContent = '默认封面';
-
-        defaultItem.appendChild(defaultImg);
-        defaultItem.appendChild(defaultText);
-        defaultItem.appendChild(defaultBadge);
-        grid.appendChild(defaultItem);
-
         if (!editingPhotos.length) {
+            const defaultItem = document.createElement('div');
+            defaultItem.className = 'photo-preview-item';
+
+            const defaultImg = document.createElement('img');
+            defaultImg.alt = '系统默认封面';
+            defaultImg.src = createPlaceholderSvg(getDefaultCoverLabel());
+
+            const defaultText = document.createElement('div');
+            defaultText.style.fontSize = '12px';
+            defaultText.style.wordBreak = 'break-all';
+            defaultText.textContent = '当前未添加自定义封面，系统默认封面将用于展示。';
+
+            const defaultBadge = document.createElement('button');
+            defaultBadge.type = 'button';
+            defaultBadge.className = 'btn btn-outline remove-photo-btn';
+            defaultBadge.disabled = true;
+            defaultBadge.textContent = '默认封面';
+
+            defaultItem.appendChild(defaultImg);
+            defaultItem.appendChild(defaultText);
+            defaultItem.appendChild(defaultBadge);
+            grid.appendChild(defaultItem);
+
             const empty = document.createElement('div');
             empty.className = 'empty-state';
             empty.textContent = '暂无自定义图片，当前将保留系统默认封面。';
             grid.appendChild(empty);
             return;
         }
+
+        const hint = document.createElement('div');
+        hint.className = 'empty-state';
+        hint.textContent = '已添加自定义封面，前台将不再显示系统默认封面。';
+        grid.appendChild(hint);
 
         editingPhotos.forEach((photo, index) => {
             const item = document.createElement('div');
@@ -623,7 +628,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('product-title').value = book?.title ?? '';
         document.getElementById('product-author').value = book?.author ?? '';
         document.getElementById('product-price').value = book?.price ?? '';
-        document.getElementById('product-rating').value = book?.rating ?? '';
         document.getElementById('product-description').value = book?.description ?? '';
         document.getElementById('product-category').value = book?.category ?? 'fiction';
         document.getElementById('product-tags').value = book?.tags?.join(', ') ?? '';
@@ -645,6 +649,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function getFormData() {
         syncPhotosFromTextarea();
         const photos = [...editingPhotos];
+        const existingBook = books.find(item => String(item.id) === String(editingProductId));
         const rawId = document.getElementById('product-id').value.trim();
         const idValue = rawId ? Number(rawId) : null;
         if (rawId && (!Number.isFinite(idValue) || idValue <= 0)) {
@@ -658,7 +663,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             author: document.getElementById('product-author').value.trim() || '未知作者',
             category: document.getElementById('product-category').value || 'all',
             price: Number.parseFloat(document.getElementById('product-price').value) || 0,
-            rating: Number.parseFloat(document.getElementById('product-rating').value) || 4.5,
+            rating: Number.isFinite(Number(existingBook?.rating)) ? Number(existingBook.rating) : 0,
             description: document.getElementById('product-description').value.trim() || '暂无简介',
             summaryHtml: sanitizeSummaryHtml(document.getElementById('product-summary-html').value.trim() || '<p>暂无简介</p>'),
             publisher: document.getElementById('product-publisher').value.trim() || '未知出版社',
@@ -718,10 +723,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         return null;
     }
 
+    function upsertBookLocally(book, referenceId = editingProductId ?? book?.id) {
+        const normalized = normalizeBook(book, books.length);
+        const index = books.findIndex(item => String(item.id) === String(referenceId ?? normalized.id));
+        if (index >= 0) books[index] = normalized;
+        else books.unshift(normalized);
+
+        persistBooks();
+        renderBooks();
+        closeProductModal();
+        return normalized;
+    }
+
     async function saveBook(book) {
         if (!client) {
-            alert('未连接到 Supabase，无法同步到云端。请检查网络或 Supabase 配置。');
-            return false;
+            upsertBookLocally(book);
+            alert('当前未连接到 Supabase，已先保存到本地缓存。');
+            return true;
         }
 
         const payload = toBookPayload(book);
@@ -760,14 +778,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             return false;
         }
 
-        const cloudBook = data ? normalizeBook(data, 0) : book;
-        const index = books.findIndex(item => String(item.id) === String(editingProductId ?? cloudBook.id ?? book.id));
-        if (index >= 0) books[index] = cloudBook;
-        else books.unshift(cloudBook);
+        const cloudBook = normalizeBook({
+            ...book,
+            ...(data || {}),
+            id: data?.id ?? book.id,
+            disabled: typeof data?.disabled !== 'undefined' ? data.disabled : book.disabled,
+            photos: Array.isArray(data?.photos) ? data.photos : book.photos,
+            tags: Array.isArray(data?.tags) ? data.tags : book.tags,
+            summary_html: data?.summary_html ?? book.summaryHtml,
+            summaryHtml: data?.summaryHtml ?? data?.summary_html ?? book.summaryHtml
+        }, 0);
 
-        persistBooks();
-        renderBooks();
-        closeProductModal();
+        upsertBookLocally(cloudBook);
         return true;
     }
 

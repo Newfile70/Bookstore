@@ -735,8 +735,8 @@
                     }
                 } else {
                     const email = emailInput.value.trim();
-                    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                        showMessage('请输入有效的邮箱地址', 'error');
+                    if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
+                        showMessage('邮箱只需满足“xxx@yyy”格式', 'error');
                         return false;
                     }
                 }
@@ -762,6 +762,15 @@
                 
                 return true;
             }
+
+            function normalizeEmailForAuth(rawEmail) {
+                const email = String(rawEmail || '').trim();
+                if (!email.includes('@')) return email;
+                const [localPart, domainPart] = email.split('@');
+                if (!localPart || !domainPart) return email;
+                if (domainPart.includes('.')) return email;
+                return `${localPart}@${domainPart}.local`;
+            }
             
             // 处理注册表单提交（使用 Supabase Auth 创建用户，然后插入 profile）
             registerForm.addEventListener('submit', async function(e) {
@@ -772,7 +781,7 @@
                 const username = usernameInput.value.trim();
                 const password = passwordInput.value;
                 const fullName = fullNameInput.value.trim();
-                const email = emailInput.value.trim();
+                const email = normalizeEmailForAuth(emailInput.value.trim());
                 const subscribeNews = document.getElementById('subscribeNews').checked;
                 const shippingAddress = document.getElementById('shippingAddress').value.trim();
                 const shopName = shopNameInput.value.trim();

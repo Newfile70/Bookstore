@@ -569,6 +569,15 @@
                 setTimeout(() => { loginMessage.style.display = 'none'; }, 5000);
             }
 
+            function normalizeEmailForAuth(rawEmail) {
+                const email = String(rawEmail || '').trim();
+                if (!email.includes('@')) return email;
+                const [localPart, domainPart] = email.split('@');
+                if (!localPart || !domainPart) return email;
+                if (domainPart.includes('.')) return email;
+                return `${localPart}@${domainPart}.local`;
+            }
+
             // 处理登录表单提交（优先使用 Supabase Auth）
             loginForm.addEventListener('submit', async function(e) {
                 e.preventDefault();
@@ -615,7 +624,7 @@
                 // Supabase expects an email for auth; if user entered a username, try to lookup email first
                 if (supabaseClient) {
                     try {
-                        let emailForSignIn = username;
+                        let emailForSignIn = username.includes('@') ? normalizeEmailForAuth(username) : username;
                         let canonicalUsername = username;
 
                         // If input doesn't look like an email, attempt to find the user's email by username
