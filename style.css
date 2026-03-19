@@ -883,6 +883,7 @@ p { color: var(--text-light); }
 
 .section-footer {
     text-align: center;
+    margin-top: 28px;
 }
 
 /* 推荐区域 */
@@ -1213,6 +1214,62 @@ p { color: var(--text-light); }
     gap: 8px;
 }
 
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+}
+
+.pagination .pagination-btn {
+    min-width: 42px;
+    height: 40px;
+    padding: 0 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: white;
+    color: var(--text-color);
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: var(--font-body);
+}
+
+.pagination .pagination-btn:hover:not(:disabled) {
+    border-color: var(--accent-color);
+    color: var(--primary-color);
+    transform: translateY(-1px);
+}
+
+.pagination .pagination-btn.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+    font-weight: 700;
+}
+
+.pagination .pagination-btn.disabled,
+.pagination .pagination-btn:disabled {
+    cursor: not-allowed;
+    color: var(--text-light);
+    background: var(--light-color);
+    border-color: var(--border-color);
+    transform: none;
+}
+
+.pagination .pagination-ellipsis {
+    min-width: 24px;
+    text-align: center;
+    color: var(--text-light);
+}
+
+.pagination .pagination-info {
+    margin-left: 8px;
+    color: var(--text-light);
+    font-size: 14px;
+}
+
 /* 响应式设计 */
 @media (max-width: 1024px) {
     .hero .container {
@@ -1292,7 +1349,20 @@ p { color: var(--text-light); }
         grid-template-columns: 1fr;
     }
 
-    .pagination { display: flex; justify-content: center; gap: 10px; margin-top: 20px; }
-    .pagination button { padding: 8px 16px; border: 1px solid var(--border-color); background: white; cursor: pointer; }
-    .pagination button.active { background: var(--primary-color); color: white; }
+    .pagination {
+        gap: 6px;
+    }
+
+    .pagination .pagination-btn {
+        min-width: 36px;
+        height: 36px;
+        padding: 0 10px;
+        font-size: 14px;
+    }
+
+    .pagination .pagination-info {
+        width: 100%;
+        margin-left: 0;
+        text-align: center;
+    }
 }

@@ -86,11 +86,43 @@ document.addEventListener('DOMContentLoaded', async () => {
                 || /^<\?xml[\s\S]*<svg[\s>]/i.test(text);
     }
 
+    function isMalformedPhotoEntry(value) {
+        const text = String(value || '').trim();
+        if (!text) return true;
+        if (/^data:image\//i.test(text) && !text.includes(',')) return true;
+        if (/^[A-Za-z0-9+/=]{20,}$/.test(text)) return true;
+        return false;
+    }
+
     function normalizeEditablePhotos(value) {
-        return (Array.isArray(value) ? value : String(value || '').split(/[\n,]/))
+        return splitPhotoInput(value)
             .map(item => String(item).trim())
             .filter(Boolean)
+            .filter(item => !isMalformedPhotoEntry(item))
             .filter(item => !isGeneratedPlaceholderPhoto(item));
+    }
+
+    function splitPhotoInput(value) {
+        if (Array.isArray(value)) {
+            return value.flatMap(item => splitPhotoInput(item));
+        }
+
+        const text = String(value || '').trim();
+        if (!text) return [];
+
+        const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        const chunks = lines.length > 1 ? lines : [text];
+
+        return chunks.flatMap(chunk => {
+            const item = String(chunk || '').trim();
+            if (!item) return [];
+
+            if (/^data:image\//i.test(item) || /^blob:/i.test(item)) {
+                return [item];
+            }
+
+            return item.split(',').map(part => part.trim()).filter(Boolean);
+        });
     }
 
     function sanitizePhotoUrl(value) {
@@ -105,6 +137,46 @@ document.addEventListener('DOMContentLoaded', async () => {
             return text;
         }
         return '';
+    }
+
+    function readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(new Error(`读取文件失败: ${file?.name || 'unknown'}`));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async function addLocalPhotoFiles(fileList) {
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+
+        const imageFiles = files.filter(file => String(file?.type || '').startsWith('image/'));
+        const skipped = files.length - imageFiles.length;
+        if (!imageFiles.length) {
+            alert('请选择图片文件（jpg/png/webp/gif 等）');
+            return;
+        }
+
+        const nextPhotos = [];
+        for (const file of imageFiles) {
+            try {
+                const dataUrl = await readFileAsDataUrl(file);
+                if (dataUrl) nextPhotos.push(dataUrl);
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        if (nextPhotos.length) {
+            editingPhotos.push(...nextPhotos);
+            renderPhotoManager();
+        }
+
+        if (skipped > 0) {
+            alert(`已跳过 ${skipped} 个非图片文件`);
+        }
     }
 
     function getDefaultCoverLabel() {
@@ -145,7 +217,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function formatPhotoList(value) {
-        return (Array.isArray(value) ? value : String(value || '').split(/[\n,]/))
+        return splitPhotoInput(value)
             .map(item => String(item).trim())
             .filter(Boolean);
     }
@@ -206,7 +278,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function normalizeBook(raw, index) {
         const photos = normalizeEditablePhotos([raw.photos, raw.images, raw.photo_urls, raw.image_urls]
             .filter(Boolean)
-            .flatMap(value => Array.isArray(value) ? value : String(value).split(/[\n,]/))
+            .flatMap(value => splitPhotoInput(value))
             .map(item => String(item).trim())
             .filter(Boolean));
         const tags = (Array.isArray(raw.tags) ? raw.tags : String(raw.tags || '').split(/[#,，,\s]+/))
@@ -374,7 +446,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                             <input id="product-photo-input" type="text" placeholder="输入图片 URL 后点击添加">
                             <button type="button" class="btn btn-secondary" id="add-photo-btn">添加图片</button>
                         </div>
-                        <textarea id="product-photos" rows="3" placeholder="也可直接粘贴图片 URL，多张请换行或逗号分隔"></textarea>
+                        <input id="product-photo-file" type="file" accept="image/*" multiple>
+                        <div style="font-size:12px;color:#6b7280;">可直接选择本地图片，无需先复制到项目目录；也支持继续粘贴图片 URL。</div>
+                        <textarea id="product-photos" rows="3" placeholder="也可直接粘贴图片 URL，多张请优先换行分隔"></textarea>
                         <div id="photo-preview-grid" class="photo-preview-grid"></div>
                     </div>
                     <label class="full"><input id="product-disabled" type="checkbox"> 下架 / 禁用该产品</label>
@@ -918,6 +992,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             editingPhotos.push(value);
             if (input) input.value = '';
             renderPhotoManager();
+        });
+        document.getElementById('product-photo-file')?.addEventListener('change', async event => {
+            const input = event.target;
+            await addLocalPhotoFiles(input?.files);
+            if (input) input.value = '';
         });
         document.getElementById('product-photos')?.addEventListener('change', syncPhotosFromTextarea);
         elements.searchBtn?.addEventListener('click', searchBooks);

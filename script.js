@@ -719,17 +719,86 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         pagination.innerHTML = '';
         if (totalPages > 1) {
-            for (let i = 1; i <= totalPages; i++) {
+            pagination.setAttribute('aria-label', '图书分页导航');
+
+            const jumpToPage = (page) => {
+                if (page < 1 || page > totalPages || page === currentPage) return;
+                currentPage = page;
+                renderBooks(booksToRender);
+            };
+
+            const createPageButton = ({ label, page, disabled = false, active = false, title = '' }) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                btn.textContent = i;
-                btn.className = (i === currentPage) ? 'active' : '';
-                btn.addEventListener('click', () => {
-                    currentPage = i;
-                    renderBooks(booksToRender);
-                });
-                pagination.appendChild(btn);
-            }
+                btn.textContent = label;
+                btn.className = 'pagination-btn';
+                if (active) btn.classList.add('active');
+                if (disabled) btn.classList.add('disabled');
+                if (title) btn.title = title;
+                btn.disabled = disabled;
+                if (!disabled && Number.isFinite(page)) {
+                    btn.addEventListener('click', () => jumpToPage(page));
+                }
+                return btn;
+            };
+
+            const buildPageItems = () => {
+                if (totalPages <= 7) {
+                    return Array.from({ length: totalPages }, (_, idx) => idx + 1);
+                }
+
+                const items = [1];
+                const windowStart = Math.max(2, currentPage - 1);
+                const windowEnd = Math.min(totalPages - 1, currentPage + 1);
+
+                if (windowStart > 2) items.push('ellipsis-left');
+                for (let page = windowStart; page <= windowEnd; page += 1) {
+                    items.push(page);
+                }
+                if (windowEnd < totalPages - 1) items.push('ellipsis-right');
+
+                items.push(totalPages);
+                return items;
+            };
+
+            pagination.appendChild(createPageButton({
+                label: '上一页',
+                page: currentPage - 1,
+                disabled: currentPage === 1,
+                title: '上一页'
+            }));
+
+            buildPageItems().forEach(item => {
+                if (typeof item === 'number') {
+                    pagination.appendChild(createPageButton({
+                        label: String(item),
+                        page: item,
+                        active: item === currentPage,
+                        title: `第 ${item} 页`
+                    }));
+                    return;
+                }
+
+                const ellipsis = document.createElement('span');
+                ellipsis.className = 'pagination-ellipsis';
+                ellipsis.textContent = '...';
+                pagination.appendChild(ellipsis);
+            });
+
+            pagination.appendChild(createPageButton({
+                label: '下一页',
+                page: currentPage + 1,
+                disabled: currentPage === totalPages,
+                title: '下一页'
+            }));
+
+            const info = document.createElement('span');
+            info.className = 'pagination-info';
+            info.textContent = `第 ${currentPage} / ${totalPages} 页`;
+            pagination.appendChild(info);
+        } else {
+            pagination.removeAttribute('aria-label');
+            pagination.innerHTML = '';
         }
 
         // 为添加到购物车按钮添加事件监听器（游客会被阻止并提示登录）
