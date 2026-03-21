@@ -27,11 +27,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     let books = [];
     let recommendations = [];
     let userOrders = [];
+    let bookReviews = [];
+    let currentUserId = null;
     let currentOrderFilter = 'all';
     let browsingHistory = [];
     let detailGalleryAutoplayTimer = null;
     const DETAIL_GALLERY_INTERVAL_MS = 2000;
     const favoriteBookIds = new Set();
+    const reviewedOrderBookKeys = new Set();
+    const bookRatingStatsMap = new Map();
     const cartItems = [];
 
     function stopDetailGalleryAutoplay() {
@@ -92,13 +96,214 @@ document.addEventListener('DOMContentLoaded', async function() {
         };
     }
 
+    function normalizeOrderItem(rawItem) {
+        const parsedBookId = Number(rawItem?.bookId ?? rawItem?.book_id ?? rawItem?.id);
+        const bookId = Number.isFinite(parsedBookId) ? parsedBookId : null;
+        const quantity = Number(rawItem?.quantity ?? 0) || 0;
+        const price = Number(rawItem?.price ?? 0) || 0;
+        const subtotal = Number(rawItem?.subtotal ?? (price * quantity));
+        const fallbackBook = bookId !== null ? findBookById(bookId, { includeDisabled: true }) : null;
+        return {
+            bookId,
+            title: String(rawItem?.title || fallbackBook?.title || '图书'),
+            quantity,
+            price,
+            subtotal: Number.isFinite(subtotal) ? subtotal : 0
+        };
+    }
+
+    function clampRating(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return 0;
+        return Math.min(5, Math.max(1, Math.round(numeric)));
+    }
+
+    function getReviewOrderBookKey(orderId, bookId, userId = '') {
+        return `${String(userId || '').trim()}::${String(orderId || '').trim()}::${String(bookId || '').trim()}`;
+    }
+
+    function getBookAggregateRating(bookId) {
+        const stats = bookRatingStatsMap.get(String(bookId));
+        if (!stats || !Number.isFinite(Number(stats.avg)) || Number(stats.count) <= 0) return null;
+        return Number(stats.avg);
+    }
+
+    function formatRatingValue(value, fallback = '暂无评分') {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) && numeric > 0 ? numeric.toFixed(1) : fallback;
+    }
+
     function hasBookRating(book) {
-        const rating = Number(book?.rating);
+        const aggregate = getBookAggregateRating(book?.id);
+        const rating = Number.isFinite(aggregate) && aggregate > 0 ? aggregate : Number(book?.rating);
         return Number.isFinite(rating) && rating > 0;
     }
 
     function formatBookRating(book, fallback = '暂无评分') {
+        const aggregate = getBookAggregateRating(book?.id);
+        if (Number.isFinite(aggregate) && aggregate > 0) return Number(aggregate).toFixed(1);
         return hasBookRating(book) ? Number(book.rating).toFixed(1) : fallback;
+    }
+
+    function clearReviewCaches() {
+        reviewedOrderBookKeys.clear();
+        bookRatingStatsMap.clear();
+    }
+
+    function rebuildReviewCaches() {
+        clearReviewCaches();
+        const statBuckets = new Map();
+
+        (Array.isArray(bookReviews) ? bookReviews : []).forEach(review => {
+            const orderId = String(review?.orderId ?? '').trim();
+            const bookId = Number(review?.bookId);
+            const rating = Number(review?.rating);
+
+            const reviewUserId = String(review?.userId || '').trim();
+            if (orderId && Number.isFinite(bookId)) {
+                reviewedOrderBookKeys.add(getReviewOrderBookKey(orderId, bookId, reviewUserId));
+            }
+
+            if (!Number.isFinite(bookId) || !Number.isFinite(rating) || rating <= 0) return;
+
+            const key = String(bookId);
+            const bucket = statBuckets.get(key) || { total: 0, count: 0 };
+            bucket.total += rating;
+            bucket.count += 1;
+            statBuckets.set(key, bucket);
+        });
+
+        statBuckets.forEach((bucket, key) => {
+            if (!bucket.count) return;
+            bookRatingStatsMap.set(key, {
+                avg: Number((bucket.total / bucket.count).toFixed(2)),
+                count: bucket.count
+            });
+        });
+    }
+
+    function normalizeBookReview(raw, index = 0) {
+        const parsedRating = clampRating(raw?.rating ?? raw?.score);
+        const parsedBookId = Number(raw?.book_id ?? raw?.bookId);
+        return {
+            id: raw?.id ?? `review-${index}`,
+            orderId: raw?.order_id ?? raw?.orderId ?? '',
+            userId: raw?.user_id ?? raw?.userId ?? null,
+            bookId: Number.isFinite(parsedBookId) ? parsedBookId : null,
+            rating: parsedRating,
+            comment: String(raw?.comment ?? raw?.content ?? '').trim(),
+            reviewerName: String(raw?.reviewer_name ?? raw?.reviewerName ?? raw?.customer_name ?? '').trim(),
+            createdAt: raw?.created_at ?? raw?.createdAt ?? raw?.updated_at ?? raw?.updatedAt ?? ''
+        };
+    }
+
+    async function loadBookReviewsFromSupabase() {
+        bookReviews = [];
+        clearReviewCaches();
+        if (!supabaseClient) return;
+
+        try {
+            const { data, error } = await supabaseClient.from('book_reviews').select('*');
+            if (error) {
+                console.warn('Load book reviews failed:', error);
+                return;
+            }
+
+            bookReviews = Array.isArray(data)
+                ? data.map((row, index) => normalizeBookReview(row, index)).filter(row => Number.isFinite(Number(row.bookId)) && row.rating > 0)
+                : [];
+            rebuildReviewCaches();
+        } catch (e) {
+            console.warn('Unexpected load book reviews error:', e);
+        }
+    }
+
+    function isOrderBookReviewed(orderId, bookId) {
+        if (!orderId || !Number.isFinite(Number(bookId))) return false;
+        const keyByCurrentUser = getReviewOrderBookKey(orderId, Number(bookId), currentUserId);
+        const keyByAnonymous = getReviewOrderBookKey(orderId, Number(bookId), '');
+        return reviewedOrderBookKeys.has(keyByCurrentUser) || reviewedOrderBookKeys.has(keyByAnonymous);
+    }
+
+    function getOrderPendingReviewCount(order) {
+        const status = normalizeOrderStatus(order?.status);
+        if (status !== 'received') return 0;
+        const items = Array.isArray(order?.items) ? order.items : [];
+        const targetBookIds = Array.from(new Set(items
+            .map(item => Number(item?.bookId))
+            .filter(bookId => Number.isFinite(bookId))));
+        if (!targetBookIds.length) return 0;
+        return targetBookIds.filter(bookId => !isOrderBookReviewed(order.id, bookId)).length;
+    }
+
+    async function saveBookReviewToCloud(reviewPayload) {
+        if (!supabaseClient) return { ok: false, message: '未连接到数据库' };
+
+        const userId = String(reviewPayload?.userId || '').trim();
+        if (!userId) return { ok: false, message: '请先使用已注册账号登录后再提交评价' };
+
+        const rating = clampRating(reviewPayload?.rating);
+        if (!rating) return { ok: false, message: '评分必须在 1-5 分之间' };
+
+        const bookId = Number(reviewPayload?.bookId);
+        if (!Number.isFinite(bookId)) return { ok: false, message: '图书信息缺失，无法提交评价' };
+
+        const payload = {
+            order_id: String(reviewPayload?.orderId || '').trim(),
+            user_id: userId,
+            book_id: bookId,
+            rating,
+            comment: String(reviewPayload?.comment || '').trim() || null,
+            reviewer_name: String(reviewPayload?.reviewerName || '').trim() || null,
+            updated_at: new Date().toISOString()
+        };
+
+        if (!payload.order_id) return { ok: false, message: '订单信息缺失，无法提交评价' };
+
+        const conflictCandidates = ['user_id,order_id,book_id', 'order_id,user_id,book_id'];
+        for (const conflict of conflictCandidates) {
+            const { error } = await supabaseClient
+                .from('book_reviews')
+                .upsert([{ ...payload, created_at: new Date().toISOString() }], { onConflict: conflict });
+
+            if (!error) return { ok: true };
+
+            const msg = String(error?.message || error?.details || error?.hint || '');
+            const isConflictMissing = msg.includes('constraint') || msg.includes('on conflict') || msg.includes('unique') || msg.includes('there is no unique');
+            if (!isConflictMissing) {
+                if (msg.toLowerCase().includes('row-level security') || msg.toLowerCase().includes('permission denied')) {
+                    return { ok: false, message: 'book_reviews 表权限策略未放行，请检查 Supabase RLS' };
+                }
+                if (msg.includes('relation') || msg.includes('does not exist')) {
+                    return { ok: false, message: 'book_reviews 表不存在，请先执行建表 SQL' };
+                }
+                return { ok: false, message: msg || '未知错误' };
+            }
+        }
+
+        const { error: updateError } = await supabaseClient
+            .from('book_reviews')
+            .update(payload)
+            .eq('user_id', payload.user_id)
+            .eq('order_id', payload.order_id)
+            .eq('book_id', payload.book_id);
+
+        if (!updateError) return { ok: true };
+
+        const { error: insertError } = await supabaseClient
+            .from('book_reviews')
+            .insert([{ ...payload, created_at: new Date().toISOString() }]);
+
+        if (!insertError) return { ok: true };
+
+        const finalMessage = String(insertError?.message || insertError?.details || insertError?.hint || '未知错误');
+        if (finalMessage.toLowerCase().includes('row-level security') || finalMessage.toLowerCase().includes('permission denied')) {
+            return { ok: false, message: 'book_reviews 表权限策略未放行，请检查 Supabase RLS' };
+        }
+        if (finalMessage.includes('relation') || finalMessage.includes('does not exist')) {
+            return { ok: false, message: 'book_reviews 表不存在，请先执行建表 SQL' };
+        }
+        return { ok: false, message: finalMessage };
     }
 
     function loadCachedBooks() {
@@ -150,7 +355,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             totalAmount: Number(raw?.total_amount ?? raw?.totalAmount ?? 0) || 0,
             shippingAddress: raw?.shipping_address ?? raw?.shippingAddress ?? '-',
             status: normalizeOrderStatus(raw?.status),
-            items: Array.isArray(items) ? items : [],
+            items: Array.isArray(items) ? items.map(normalizeOrderItem) : [],
             shipmentDate: raw?.shipment_date ?? raw?.shipmentDate ?? '',
             arrivedDate: raw?.arrived_date ?? raw?.arrivedDate ?? '',
             receivedDate: raw?.received_date ?? raw?.receivedDate ?? '',
@@ -597,8 +802,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // 初始化页面
     async function initPage() {
+        currentUserId = await getCurrentSupabaseUserId();
         await loadFavoritesFromSupabase();
         await loadUserOrdersFromSupabase();
+        await loadBookReviewsFromSupabase();
         browsingHistory = loadHistoryFromStorage();
         syncCartWithVisibleBooks();
         syncHistoryWithVisibleBooks();
@@ -1090,6 +1297,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         const authUser = await getCurrentSupabaseUser();
         const userId = authUser?.id || null;
+        currentUserId = userId || currentUserId;
         const nameAliases = await collectCurrentUserNameAliases(authUser);
         const rows = await fetchOrdersFromSupabase();
 
@@ -1195,6 +1403,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                 : '<div style="margin-top:8px;color:var(--text-light);">该订单未记录商品明细</div>';
             const canReceive = normalizeOrderStatus(order.status) === 'arrived';
             const remainingText = getOrderRemainingText(order);
+            const pendingReviewCount = getOrderPendingReviewCount(order);
+            const canReviewNow = normalizeOrderStatus(order.status) === 'received' && pendingReviewCount > 0;
 
             item.innerHTML = `
                 <div class="cart-item-details order-open-detail" data-order-id="${order.id}" role="button" tabindex="0" style="width:100%;cursor:pointer;">
@@ -1208,10 +1418,11 @@ document.addEventListener('DOMContentLoaded', async function() {
                         <div>到货时间：${escapeHtml(formatOrderDate(order.arrivedDate))}</div>
                         <div>收货时间：${escapeHtml(formatOrderDate(order.receivedDate))}</div>
                         ${remainingText ? `<div style="color:#8b5e3c;">${escapeHtml(remainingText)}</div>` : ''}
+                        ${canReviewNow ? `<div style="color:#8b5e3c;">待评价图书：${pendingReviewCount} 本</div>` : ''}
                     </div>
                     <div style="margin-top:8px;font-size:12px;color:#8b5e3c;">点击查看订单详情</div>
                     ${itemsHtml}
-                    ${canReceive ? `<div class="cart-item-controls" style="margin-top:10px;justify-content:flex-end;"><button class="btn btn-primary btn-confirm-received" data-id="${order.id}">已收货</button></div>` : ''}
+                    ${(canReceive || canReviewNow) ? `<div class="cart-item-controls" style="margin-top:10px;justify-content:flex-end;gap:8px;">${canReceive ? `<button class="btn btn-primary btn-confirm-received" data-id="${order.id}">已收货</button>` : ''}${canReviewNow ? `<button class="btn btn-secondary btn-open-review" data-id="${order.id}">去评价</button>` : ''}</div>` : ''}
                 </div>
             `;
 
@@ -1236,7 +1447,15 @@ document.addEventListener('DOMContentLoaded', async function() {
                     order.receivedDate = new Date().toISOString();
                 }
                 renderOrdersSidebar();
-                showNotification('已确认收货，订单状态已同步更新', 'success');
+                showNotification('已确认收货，请为订单内图书评分评价', 'success');
+                openOrderDetail(orderId);
+            });
+        });
+
+        ordersItemsContainer.querySelectorAll('.btn-open-review').forEach(button => {
+            button.addEventListener('click', function(e) {
+                e.stopPropagation();
+                openOrderDetail(this.dataset.id, { focusReview: true });
             });
         });
 
@@ -1302,7 +1521,127 @@ document.addEventListener('DOMContentLoaded', async function() {
         document.body.classList.remove('detail-open');
     }
 
-    function openOrderDetail(orderId) {
+    function findExistingOrderBookReview(orderId, bookId) {
+        const targetOrderId = String(orderId || '').trim();
+        const targetBookId = Number(bookId);
+        if (!targetOrderId || !Number.isFinite(targetBookId)) return null;
+
+        const userKey = String(currentUserId || '').trim();
+        return bookReviews.find(review => {
+            if (String(review?.orderId || '').trim() !== targetOrderId) return false;
+            if (Number(review?.bookId) !== targetBookId) return false;
+            const reviewUserKey = String(review?.userId || '').trim();
+            if (!userKey) return !reviewUserKey;
+            return !reviewUserKey || reviewUserKey === userKey;
+        }) || null;
+    }
+
+    function renderOrderReviewCard(order, item) {
+        const bookId = Number(item?.bookId);
+        const review = Number.isFinite(bookId) ? findExistingOrderBookReview(order.id, bookId) : null;
+        const initialRating = clampRating(review?.rating || 0);
+        const initialComment = String(review?.comment || '').trim();
+        const canReviewOrder = normalizeOrderStatus(order?.status) === 'received';
+
+        if (!Number.isFinite(bookId)) {
+            return `
+                <div class="order-review-card disabled">
+                    <div class="order-review-header">
+                        <strong>${escapeHtml(item?.title || '图书')}</strong>
+                        <span class="order-review-hint">该商品缺少 bookId，无法关联评价</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="order-review-card ${canReviewOrder ? '' : 'disabled'}" data-order-id="${escapeHtml(order.id)}" data-book-id="${bookId}">
+                <div class="order-review-header">
+                    <strong>${escapeHtml(item?.title || '图书')}</strong>
+                    <span class="order-review-hint">${canReviewOrder ? (review ? '已评价，可修改' : '请为该图书评分（可选评论）') : '订单未收货，暂不可评价'}</span>
+                </div>
+                <div class="order-review-stars" data-rating="${initialRating}">
+                    ${[1, 2, 3, 4, 5].map(score => `<button type="button" class="order-review-star ${score <= initialRating ? 'active' : ''}" data-score="${score}" ${canReviewOrder ? '' : 'disabled'}><i class="fas fa-star"></i></button>`).join('')}
+                </div>
+                <textarea class="order-review-comment" rows="3" maxlength="300" placeholder="可选：写下你的评价（最多 300 字）" ${canReviewOrder ? '' : 'disabled'}>${escapeHtml(initialComment)}</textarea>
+                <div class="order-review-actions">
+                    <button type="button" class="btn btn-primary btn-submit-order-review" ${canReviewOrder ? '' : 'disabled'}>提交评价</button>
+                    <span class="order-review-status">${review ? `当前评分：${initialRating} 分` : '尚未提交评价'}</span>
+                </div>
+            </div>
+        `;
+    }
+
+    function bindOrderReviewInteractions(container) {
+        if (!container) return;
+
+        container.querySelectorAll('.order-review-stars').forEach(starWrap => {
+            const syncStars = (rating) => {
+                starWrap.dataset.rating = String(rating);
+                starWrap.querySelectorAll('.order-review-star').forEach(button => {
+                    const score = Number(button.dataset.score || 0);
+                    button.classList.toggle('active', score <= rating);
+                });
+            };
+
+            starWrap.querySelectorAll('.order-review-star').forEach(button => {
+                button.addEventListener('click', function() {
+                    const score = clampRating(this.dataset.score);
+                    if (!score) return;
+                    syncStars(score);
+                });
+            });
+        });
+
+        container.querySelectorAll('.btn-submit-order-review').forEach(button => {
+            button.addEventListener('click', async function() {
+                const card = this.closest('.order-review-card');
+                if (!card) return;
+
+                const orderId = String(card.dataset.orderId || '').trim();
+                const bookId = Number(card.dataset.bookId);
+                const starWrap = card.querySelector('.order-review-stars');
+                const rating = clampRating(starWrap?.dataset.rating);
+                const comment = String(card.querySelector('.order-review-comment')?.value || '').trim();
+
+                if (!rating) {
+                    showNotification('请先选择 1-5 分评分', 'info');
+                    return;
+                }
+
+                if (!orderId || !Number.isFinite(bookId)) {
+                    showNotification('评价提交失败：订单或图书信息异常', 'info');
+                    return;
+                }
+
+                const reviewerName = String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim() || '匿名用户';
+                this.disabled = true;
+                const result = await saveBookReviewToCloud({
+                    orderId,
+                    userId: currentUserId,
+                    bookId,
+                    rating,
+                    comment,
+                    reviewerName
+                });
+                this.disabled = false;
+
+                if (!result.ok) {
+                    showNotification(`评价提交失败：${result.message}`, 'info');
+                    return;
+                }
+
+                await loadBookReviewsFromSupabase();
+                renderBooks(books);
+                renderRecommendations();
+                renderOrdersSidebar();
+                openOrderDetail(orderId, { focusReview: true });
+                showNotification('评价提交成功，已计入图书综合评分', 'success');
+            });
+        });
+    }
+
+    function openOrderDetail(orderId, options = {}) {
         const order = userOrders.find(item => String(item.id) === String(orderId));
         if (!order) {
             showNotification('未找到该订单详情', 'info');
@@ -1316,6 +1655,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         const statusLabel = ORDER_STATUS_LABELS[normalizeOrderStatus(order.status)] || order.status;
         const remainingText = getOrderRemainingText(order);
         const items = Array.isArray(order.items) ? order.items : [];
+        const canReviewOrder = normalizeOrderStatus(order.status) === 'received';
+        const reviewableItems = items.filter(item => Number.isFinite(Number(item?.bookId)));
+        const pendingReviewCount = getOrderPendingReviewCount(order);
 
         body.innerHTML = `
             <div class="order-detail-header">
@@ -1354,10 +1696,26 @@ document.addEventListener('DOMContentLoaded', async function() {
                     </div>
                 ` : '<p class="book-detail-description">该订单未记录商品明细。</p>'}
             </div>
+            <div class="book-detail-section" data-section="order-reviews">
+                <h3>用户评价</h3>
+                <p class="book-detail-description">${canReviewOrder ? `请为本订单内图书逐本评分（可选评论），最高 5 分。${pendingReviewCount > 0 ? `还有 ${pendingReviewCount} 本待评价。` : '已全部评价完成。'}` : '订单签收后才能评价图书。'}</p>
+                ${reviewableItems.length ? `
+                    <div class="order-review-list">
+                        ${reviewableItems.map(item => renderOrderReviewCard(order, item)).join('')}
+                    </div>
+                ` : '<p class="book-detail-description">该订单商品缺少图书编号，无法提交评价。</p>'}
+            </div>
         `;
+
+        bindOrderReviewInteractions(body);
 
         modal.classList.add('active');
         document.body.classList.add('detail-open');
+
+        if (options.focusReview) {
+            const reviewSection = body.querySelector('[data-section="order-reviews"]');
+            reviewSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
     }
 
     function renderHistorySidebar() {
@@ -2359,6 +2717,7 @@ if (checkoutBtn) {
     }
 
     function getBookMetaRows(book) {
+        const ratingStats = bookRatingStatsMap.get(String(book?.id));
         const rows = [
             { label: '图书分类', value: getCategoryName(book.category) },
             { label: '作者', value: book.author || '未知作者' },
@@ -2366,12 +2725,53 @@ if (checkoutBtn) {
             { label: '价格', value: `¥ ${Number(book.price || 0).toFixed(2)}` }
         ];
 
+        if (ratingStats?.count) {
+            rows.push({ label: '评价人数', value: `${Number(ratingStats.count)} 人` });
+        }
+
         if (book.publisher) rows.push({ label: '出版社', value: book.publisher });
         if (book.isbn) rows.push({ label: 'ISBN', value: book.isbn });
         const tags = normalizeTextList(book.tags);
         if (tags.length) rows.push({ label: '标签', value: tags.join(' / ') });
 
         return rows;
+    }
+
+    function getBookReviewsForDisplay(bookId, limit = 12) {
+        const targetBookId = Number(bookId);
+        if (!Number.isFinite(targetBookId)) return [];
+        return (Array.isArray(bookReviews) ? bookReviews : [])
+            .filter(review => Number(review?.bookId) === targetBookId && Number(review?.rating) > 0)
+            .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+            .slice(0, limit);
+    }
+
+    function renderBookReviewsSection(book) {
+        const reviews = getBookReviewsForDisplay(book?.id, 12);
+        if (!reviews.length) {
+            return '<p class="book-detail-description">暂无用户评价，欢迎购买后成为首位评价者。</p>';
+        }
+
+        return `
+            <div class="book-review-list">
+                ${reviews.map(review => {
+                    const rating = clampRating(review?.rating);
+                    const createdText = review?.createdAt ? formatOrderDate(review.createdAt) : '时间未知';
+                    const reviewerName = String(review?.reviewerName || '匿名用户').trim();
+                    const comment = String(review?.comment || '').trim();
+                    return `
+                        <div class="book-review-item">
+                            <div class="book-review-header">
+                                <strong>${escapeHtml(reviewerName)}</strong>
+                                <span class="book-review-date">${escapeHtml(createdText)}</span>
+                            </div>
+                            <div class="book-review-rating">${[1, 2, 3, 4, 5].map(score => `<i class="fas fa-star ${score <= rating ? 'active' : ''}"></i>`).join('')}<span>${rating}.0 分</span></div>
+                            <p class="book-review-comment">${comment ? escapeHtml(comment) : '该用户仅评分，未填写评论。'}</p>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
     }
 
     function openBookDetail(bookId) {
@@ -2457,6 +2857,10 @@ if (checkoutBtn) {
                 <h3>关键词</h3>
                 <div class="book-detail-tags">${tags.map(tag => `<span class="book-detail-tag">${escapeHtml(tag)}</span>`).join('')}</div>
             </div>` : ''}
+            <div class="book-detail-section" data-section="book-reviews">
+                <h3>用户评价</h3>
+                ${renderBookReviewsSection(book)}
+            </div>
         `;
 
         body.querySelector('.detail-add-cart')?.addEventListener('click', function() {
@@ -2899,6 +3303,95 @@ if (checkoutBtn) {
             background: #fff;
             border: 1px solid rgba(15, 23, 42, 0.06);
             color: #4b5563;
+        }
+
+        .order-review-list,
+        .book-review-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .order-review-card,
+        .book-review-item {
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 14px;
+            padding: 14px;
+            background: #fff;
+        }
+
+        .order-review-card.disabled {
+            background: #f8f8f8;
+            opacity: 0.8;
+        }
+
+        .order-review-header,
+        .book-review-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            color: #4b5563;
+        }
+
+        .order-review-hint,
+        .book-review-date {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .order-review-stars,
+        .book-review-rating {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+            color: #9ca3af;
+        }
+
+        .order-review-star {
+            border: none;
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .order-review-star.active,
+        .book-review-rating .fa-star.active {
+            color: #f59e0b;
+        }
+
+        .order-review-comment,
+        .book-review-comment {
+            width: 100%;
+            border: 1px solid rgba(15, 23, 42, 0.12);
+            border-radius: 10px;
+            padding: 10px;
+            font: inherit;
+            color: #374151;
+            background: #fff;
+            resize: vertical;
+        }
+
+        .book-review-comment {
+            border: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .order-review-actions {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .order-review-status {
+            color: #6b7280;
+            font-size: 13px;
         }
 
         @media (max-width: 768px) {
