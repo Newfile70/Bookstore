@@ -1,6 +1,15 @@
 // admin-script.js - Block A/B/C enhanced admin portal
 
 document.addEventListener('DOMContentLoaded', async () => {
+	// 产品分页
+let productsPageSize = 12;
+let productsCurrentPage = 1;
+let productsFilteredBooks = [];   // 存储当前产品列表（全量或搜索结果）
+
+// 订单分页
+let ordersPageSize = 10;
+let ordersCurrentPage = 1;
+let ordersFilteredOrders = [];    // 存储当前订单列表（全量或状态筛选）
     const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
     const client = (typeof supabase !== 'undefined' && supabase?.createClient)
@@ -316,9 +325,76 @@ document.addEventListener('DOMContentLoaded', async () => {
             source = safeParse(localStorage.getItem(STORAGE_KEYS.books), []);
         }
         books = source.map(normalizeBook);
-        localStorage.setItem(STORAGE_KEYS.books, JSON.stringify(books));
+		    productsFilteredBooks = books;
+    productsCurrentPage = 1;
+    renderProductsWithPagination();
+    persistBooks();
+       
+    }
+// 渲染当前页产品
+function renderProductsWithPagination() {
+    const start = (productsCurrentPage - 1) * productsPageSize;
+    const pageBooks = productsFilteredBooks.slice(start, start + productsPageSize);
+    renderBooks(pageBooks);          // 复用已有的 renderBooks 函数
+    renderProductsPagination();
+}
+
+// 渲染产品分页控件
+function renderProductsPagination() {
+    const totalPages = Math.ceil(productsFilteredBooks.length / productsPageSize);
+    const paginationDiv = document.getElementById('products-pagination');
+    if (!paginationDiv) return;
+
+    if (totalPages <= 1) {
+        paginationDiv.innerHTML = '';
+        return;
     }
 
+    paginationDiv.innerHTML = '';
+
+    // 上一页按钮
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = '上一页';
+    prevBtn.className = 'pagination-btn';
+    prevBtn.disabled = productsCurrentPage === 1;
+    prevBtn.addEventListener('click', () => {
+        if (productsCurrentPage > 1) {
+            productsCurrentPage--;
+            renderProductsWithPagination();
+        }
+    });
+    paginationDiv.appendChild(prevBtn);
+
+    // 页码按钮（最多显示7个）
+    const maxVisible = 5;
+    let startPage = Math.max(1, productsCurrentPage - Math.floor(maxVisible / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+    if (endPage - startPage < maxVisible - 1) startPage = Math.max(1, endPage - maxVisible + 1);
+
+    for (let i = startPage; i <= endPage; i++) {
+        const pageBtn = document.createElement('button');
+        pageBtn.textContent = i;
+        pageBtn.className = 'pagination-btn' + (i === productsCurrentPage ? ' active' : '');
+        pageBtn.addEventListener('click', () => {
+            productsCurrentPage = i;
+            renderProductsWithPagination();
+        });
+        paginationDiv.appendChild(pageBtn);
+    }
+
+    // 下一页按钮
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = '下一页';
+    nextBtn.className = 'pagination-btn';
+    nextBtn.disabled = productsCurrentPage === totalPages;
+    nextBtn.addEventListener('click', () => {
+        if (productsCurrentPage < totalPages) {
+            productsCurrentPage++;
+            renderProductsWithPagination();
+        }
+    });
+    paginationDiv.appendChild(nextBtn);
+}
     async function loadOrders() {
         let source = [];
 
@@ -366,7 +442,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         orders = source
             .map(normalizeOrder)
             .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
-
+    ordersFilteredOrders = orders;
+    ordersCurrentPage = 1;
+    renderOrdersWithPagination();
+    persistOrders();
         const autoReceiveTargets = orders.filter(shouldAutoReceiveOrder);
         for (const order of autoReceiveTargets) {
             order.status = 'received';
@@ -383,10 +462,76 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         persistOrders();
     }
+// 渲染当前页订单
+function renderOrdersWithPagination() {
+	    if (!elements.ordersList) return;
+    elements.ordersList.innerHTML = '';
+    const start = (ordersCurrentPage - 1) * ordersPageSize;
+    const pageOrders = ordersFilteredOrders.slice(start, start + ordersPageSize);
+    renderOrders(pageOrders);          // 复用已有的 renderOrders 函数（需要修改，见下文）
+    renderOrdersPagination();
+}
 
-    function persistBooks() {
-        localStorage.setItem(STORAGE_KEYS.books, JSON.stringify(books));
+// 渲染订单分页控件
+function renderOrdersPagination() {
+    const totalPages = Math.ceil(ordersFilteredOrders.length / ordersPageSize);
+    const paginationDiv = document.getElementById('orders-pagination');
+    if (!paginationDiv) return;
+
+    if (totalPages <= 1) {
+        paginationDiv.innerHTML = '';
+        return;
     }
+
+    paginationDiv.innerHTML = '';
+
+    // 上一页按钮
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = '上一页';
+    prevBtn.className = 'pagination-btn';
+    prevBtn.disabled = ordersCurrentPage === 1;
+    prevBtn.addEventListener('click', () => {
+        if (ordersCurrentPage > 1) {
+            ordersCurrentPage--;
+            renderOrdersWithPagination();
+        }
+    });
+    paginationDiv.appendChild(prevBtn);
+
+    // 页码按钮（最多显示5个）
+    const maxVisible = 5;
+    let startPage = Math.max(1, ordersCurrentPage - Math.floor(maxVisible / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+    if (endPage - startPage < maxVisible - 1) startPage = Math.max(1, endPage - maxVisible + 1);
+
+    for (let i = startPage; i <= endPage; i++) {
+        const pageBtn = document.createElement('button');
+        pageBtn.textContent = i;
+        pageBtn.className = 'pagination-btn' + (i === ordersCurrentPage ? ' active' : '');
+        pageBtn.addEventListener('click', () => {
+            ordersCurrentPage = i;
+            renderOrdersWithPagination();
+        });
+        paginationDiv.appendChild(pageBtn);
+    }
+
+    // 下一页按钮
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = '下一页';
+    nextBtn.className = 'pagination-btn';
+    nextBtn.disabled = ordersCurrentPage === totalPages;
+    nextBtn.addEventListener('click', () => {
+        if (ordersCurrentPage < totalPages) {
+            ordersCurrentPage++;
+            renderOrdersWithPagination();
+        }
+    });
+    paginationDiv.appendChild(nextBtn);
+}
+
+function persistBooks() {
+    localStorage.setItem(STORAGE_KEYS.books, JSON.stringify(books));
+}
 
     function persistOrders() {
         localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(orders));
@@ -418,6 +563,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                 @media (max-width:768px){.admin-form-grid{grid-template-columns:1fr;}}
             `;
             document.head.appendChild(style);
+			    if (!document.getElementById('products-pagination')) {
+        const productsGrid = document.getElementById('admin-products-grid');
+        if (productsGrid) {
+            const paginationDiv = document.createElement('div');
+            paginationDiv.id = 'products-pagination';
+            paginationDiv.className = 'pagination';
+            productsGrid.after(paginationDiv);
+        }
+    }
+    if (!document.getElementById('orders-pagination')) {
+        const ordersList = document.getElementById('admin-orders-list');
+        if (ordersList) {
+            const paginationDiv = document.createElement('div');
+            paginationDiv.id = 'orders-pagination';
+            paginationDiv.className = 'pagination';
+            ordersList.after(paginationDiv);
+        }
+    }
         }
 
         if (elements.productForm && !document.getElementById('product-id')) {
@@ -656,41 +819,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderPhotoManager();
     }
 
-    function renderOrders(status = getSelectedOrderStatus()) {
-        if (!elements.ordersList) return;
-        elements.ordersList.innerHTML = '';
-        const filteredOrders = status === 'all' ? orders : orders.filter(order => order.status === status);
-        if (!filteredOrders.length) {
-            elements.ordersList.innerHTML = '<div class="empty-state">暂无订单</div>';
-            return;
-        }
-        filteredOrders.forEach(order => {
-            const card = document.createElement('div');
-            card.className = 'admin-order-card';
-            card.innerHTML = `
-                <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-                    <div>
-                        <strong>订单号：${order.poNumber}</strong>
-                        <div>客户：${order.customerName || '未知客户'}</div>
-                        <div>下单时间：${formatDate(order.purchaseDate)}</div>
-                        <div>总额：¥ ${(order.totalAmount || 0).toFixed(2)}</div>
-                    </div>
-                    <div class="admin-chip">${ORDER_STATUS_LABELS[order.status] || order.status}</div>
-                </div>
-                <div>收货地址：${order.shippingAddress || '-'}</div>
-                <div class="admin-order-actions">
-                    <button class="btn btn-secondary view-order-btn" type="button" data-id="${order.id}">查看详情</button>
-                    <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="hold">设为暂缓</button>
-                    <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="shipped">发货</button>
-                    <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="arrived">已到货</button>
-                    <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="cancelled">取消</button>
-                </div>
-            `;
-            card.querySelector('.view-order-btn')?.addEventListener('click', () => openOrderModal(order.id));
-            card.querySelectorAll('.status-btn').forEach(btn => btn.addEventListener('click', () => updateOrderStatus(order.id, btn.dataset.status)));
-            elements.ordersList.appendChild(card);
-        });
+function renderOrders(ordersToRender = null) {
+    if (!elements.ordersList) return;
+    elements.ordersList.innerHTML = '';
+    // 如果传入了 ordersToRender，直接使用；否则根据当前筛选状态从全局 orders 获取
+    const filteredOrders = ordersToRender ?? (getSelectedOrderStatus() === 'all' ? orders : orders.filter(order => order.status === getSelectedOrderStatus()));
+    if (!filteredOrders.length) {
+        elements.ordersList.innerHTML = '<div class="empty-state">暂无订单</div>';
+        return;
     }
+    filteredOrders.forEach(order => {
+        const card = document.createElement('div');
+        card.className = 'admin-order-card';
+        card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <div>
+                    <strong>订单号：${order.poNumber}</strong>
+                    <div>客户：${order.customerName || '未知客户'}</div>
+                    <div>下单时间：${formatDate(order.purchaseDate)}</div>
+                    <div>总额：¥ ${(order.totalAmount || 0).toFixed(2)}</div>
+                </div>
+                <div class="admin-chip">${ORDER_STATUS_LABELS[order.status] || order.status}</div>
+            </div>
+            <div>收货地址：${order.shippingAddress || '-'}</div>
+            <div class="admin-order-actions">
+                <button class="btn btn-secondary view-order-btn" type="button" data-id="${order.id}">查看详情</button>
+                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="hold">设为暂缓</button>
+                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="shipped">发货</button>
+                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="arrived">已到货</button>
+                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="cancelled">取消</button>
+            </div>
+        `;
+        card.querySelector('.view-order-btn')?.addEventListener('click', () => openOrderModal(order.id));
+        card.querySelectorAll('.status-btn').forEach(btn => btn.addEventListener('click', () => updateOrderStatus(order.id, btn.dataset.status)));
+        elements.ordersList.appendChild(card);
+    });
+}
     function openProductModal(bookId = null) {
         editingProductId = bookId;
         const title = document.getElementById('product-form-title');
@@ -867,26 +1031,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         return true;
     }
 
-    async function toggleBookStatus(bookId) {
-        const target = books.find(item => String(item.id) === String(bookId));
-        if (!target) return;
-        const next = { ...target, disabled: !target.disabled };
-        const ok = await saveBook(next);
-        if (!ok) renderBooks();
-    }
+async function toggleBookStatus(bookId) {
+    const target = books.find(item => String(item.id) === String(bookId));
+    if (!target) return;
+    const next = { ...target, disabled: !target.disabled };
 
-    function searchBooks() {
-        const query = (elements.searchInput?.value || '').trim().toLowerCase();
-        if (!query) {
-            renderBooks();
-            return;
-        }
+    const ok = await saveBook(next);
+    if (!ok) {
+        // 保存失败，仅重新渲染当前页（保持现有数据）
+        renderProductsWithPagination();
+    } else {
+        // 保存成功，重新加载全量产品列表
+        await loadBooks();
+    }
+}
+
+function searchBooks() {
+    const query = (elements.searchInput?.value || '').trim().toLowerCase();
+    if (!query) {
+        // 无搜索词时恢复全量产品列表
+        productsFilteredBooks = books;
+    } else {
         const filtered = books.filter(book => {
             const haystack = [book.id, book.title, book.author, book.description, book.publisher, book.isbn, ...book.tags].join(' ').toLowerCase();
             return haystack.includes(query);
         });
-        renderBooks(filtered);
+        productsFilteredBooks = filtered;
     }
+    productsCurrentPage = 1;
+    renderProductsWithPagination();
+}
 
     async function updateOrderStatus(orderId, status) {
         const order = orders.find(item => String(item.id) === String(orderId));
@@ -936,16 +1110,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
 
-        order.status = targetStatus;
-        if (targetStatus === 'hold') order.holdDate = new Date().toISOString();
-        if (targetStatus === 'shipped') order.shipmentDate = new Date().toISOString();
-        if (targetStatus === 'arrived') order.arrivedDate = new Date().toISOString();
-        if (targetStatus === 'received') order.receivedDate = new Date().toISOString();
-        if (targetStatus === 'cancelled') order.cancelDate = new Date().toISOString();
-        persistOrders();
-        renderOrders();
+order.status = targetStatus;
+if (targetStatus === 'hold') order.holdDate = new Date().toISOString();
+if (targetStatus === 'shipped') order.shipmentDate = new Date().toISOString();
+if (targetStatus === 'arrived') order.arrivedDate = new Date().toISOString();
+if (targetStatus === 'received') order.receivedDate = new Date().toISOString();
+if (targetStatus === 'cancelled') order.cancelDate = new Date().toISOString();
+persistOrders();
+// 重新加载订单（会重置分页并重新渲染）
+await loadOrders();
     }
-
     function openOrderModal(orderId) {
         const order = orders.find(item => item.id === orderId);
         const modal = document.getElementById('order-modal');
@@ -1016,11 +1190,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (event.target === elements.productModal) closeProductModal();
             if (event.target.id === 'order-modal') document.getElementById('order-modal')?.classList.remove('active');
         });
-        document.querySelectorAll('.admin-order-filter').forEach(button => button.addEventListener('click', () => {
-            document.querySelectorAll('.admin-order-filter').forEach(item => item.classList.remove('active'));
-            button.classList.add('active');
-            renderOrders(button.dataset.status || 'all');
-        }));
+document.querySelectorAll('.admin-order-filter').forEach(button => {
+    button.addEventListener('click', () => {
+        document.querySelectorAll('.admin-order-filter').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+
+        const status = button.dataset.status || 'all';
+        if (status === 'all') {
+            ordersFilteredOrders = orders;          // 全量订单
+        } else {
+            ordersFilteredOrders = orders.filter(order => order.status === status);
+        }
+        ordersCurrentPage = 1;                      // 重置到第一页
+        renderOrdersWithPagination();               // 使用分页渲染
+    });
+});
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape') {
                 closeProductModal();
@@ -1033,7 +1217,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     initAdminSectionTabs();
     await loadBooks();
     await loadOrders();
-    renderBooks();
-    renderOrders();
+
     bindEvents();
 });
