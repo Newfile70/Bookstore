@@ -1047,17 +1047,46 @@ async function toggleBookStatus(bookId) {
 }
 
 function searchBooks() {
-    const query = (elements.searchInput?.value || '').trim().toLowerCase();
+    const query = (elements.searchInput?.value || '').trim();
+
     if (!query) {
         // 无搜索词时恢复全量产品列表
         productsFilteredBooks = books;
     } else {
-        const filtered = books.filter(book => {
-            const haystack = [book.id, book.title, book.author, book.description, book.publisher, book.isbn, ...book.tags].join(' ').toLowerCase();
-            return haystack.includes(query);
-        });
+        const queryLower = query.toLowerCase();
+        const isNumeric = /^\d+$/.test(query);   // 纯数字 → 视为 ID 精确搜索
+
+        let filtered = [];
+
+        if (isNumeric) {
+            // === ID 精确搜索（优先）===
+            const targetId = String(query);   // 支持字符串或数字 ID
+            filtered = books.filter(book => 
+                String(book.id) === targetId || 
+                Number(book.id) === Number(query)
+            );
+        }
+
+        // 如果 ID 精确搜索没有结果，或不是纯数字，则执行原有模糊搜索
+        if (!filtered.length) {
+            filtered = books.filter(book => {
+                const haystack = [
+                    String(book.id),
+                    book.title,
+                    book.author,
+                    book.description,
+                    book.publisher,
+                    book.isbn,
+                    ...book.tags
+                ].join(' ').toLowerCase();
+
+                return haystack.includes(queryLower);
+            });
+        }
+
         productsFilteredBooks = filtered;
     }
+
     productsCurrentPage = 1;
     renderProductsWithPagination();
 }
