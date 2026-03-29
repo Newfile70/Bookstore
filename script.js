@@ -574,7 +574,21 @@ document.addEventListener('DOMContentLoaded', async function() {
     function isOwnReview(review) {
         const reviewUserId = String(review?.userId || '').trim();
         const userKey = String(currentUserId || '').trim();
-        return Boolean(reviewUserId && userKey && reviewUserId === userKey);
+        if (reviewUserId && userKey && reviewUserId === userKey) return true;
+
+        const reviewerName = String(review?.reviewerName || '').trim().toLowerCase();
+        if (!reviewerName) return false;
+
+        const aliases = new Set();
+        const loginUsername = String(sessionStorage.getItem('loginUsername') || '').trim().toLowerCase();
+        const username = String(sessionStorage.getItem('username') || '').trim().toLowerCase();
+
+        if (loginUsername) aliases.add(loginUsername);
+        if (username) aliases.add(username);
+        if (loginUsername.includes('@')) aliases.add(loginUsername.split('@')[0]);
+        if (username.includes('@')) aliases.add(username.split('@')[0]);
+
+        return aliases.has(reviewerName);
     }
 
     function canVoteReviewHelpfulness(review) {
@@ -3463,7 +3477,8 @@ if (checkoutBtn) {
 
     function getBookReviewHelpfulnessHint(review) {
         if (isOwnReview(review)) return '这是你发布的评价，不能给自己投票';
-        if (isGuestUser() || !String(currentUserId || '').trim()) return '登录后可标记这条评价是否有帮助';
+        if (isGuestUser()) return '登录后可标记这条评价是否有帮助';
+        if (!String(currentUserId || '').trim()) return '当前账号未建立云端会话，暂不可投票';
         return '这条评价对你有帮助吗？';
     }
 
