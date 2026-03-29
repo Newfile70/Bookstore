@@ -29,6 +29,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     let userOrders = [];
     let bookReviews = [];
     let reviewHelpfulnessVotes = [];
+    let reviewReports = [];
+    let systemMessages = [];
     let currentUserId = null;
     let currentOrderFilter = 'all';
     let browsingHistory = [];
@@ -43,8 +45,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     const bookRatingStatsMap = new Map();
     const reviewHelpfulnessStatsMap = new Map();
     const currentUserReviewVoteMap = new Map();
+    const currentUserReportedReviewMap = new Map();
     const orderReviewMediaDraftMap = new Map();
     const cartItems = [];
+    const AUTO_MODERATION_RULES = {
+        violence: ['暴力', '砍死', '杀人', '血腥', '爆头', '炸弹', '枪击', 'terror', 'kill'],
+        sexual: ['色情', '约炮', '裸照', '成人视频', '性行为', 'porn', 'nude', 'sex'],
+        political: ['反动', '颠覆', '分裂国家', '敏感政治', '政治宣传', 'extremism'],
+        malicious: ['骗子', '诈骗', '恶意攻击', '人肉', '辱骂', '诽谤', '去死', '傻逼', '操你']
+    };
 
     function stopDetailGalleryAutoplay() {
         if (!detailGalleryAutoplayTimer) return;
@@ -98,6 +107,47 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (['true', '1', 'yes', 'y', 'on', 'helpful', 'up'].includes(normalized)) return true;
         if (['false', '0', 'no', 'n', 'off', 'not_helpful', 'not-helpful', 'unhelpful', 'down'].includes(normalized)) return false;
         return null;
+    }
+
+    function normalizeModerationStatus(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        if (['approved', 'pass', 'published'].includes(normalized)) return 'approved';
+        if (['pending', 'reviewing', 'manual_review', 'queued'].includes(normalized)) return 'pending';
+        if (['rejected', 'reject', 'denied'].includes(normalized)) return 'rejected';
+        if (['hidden', 'removed', 'blocked'].includes(normalized)) return 'hidden';
+        return 'approved';
+    }
+
+    function getModerationStatusLabel(status) {
+        const normalized = normalizeModerationStatus(status);
+        if (normalized === 'pending') return '待人工审核';
+        if (normalized === 'rejected') return '审核未通过';
+        if (normalized === 'hidden') return '已隐藏';
+        return '已发布';
+    }
+
+    function getCurrentDisplayUsername() {
+        const loginUsername = String(sessionStorage.getItem('loginUsername') || '').trim();
+        const username = String(sessionStorage.getItem('username') || '').trim();
+        return loginUsername || username || '匿名用户';
+    }
+
+    function evaluateReviewContentModeration(comment, reviewerName = '') {
+        const content = `${String(comment || '')} ${String(reviewerName || '')}`.toLowerCase();
+        const labels = [];
+
+        Object.entries(AUTO_MODERATION_RULES).forEach(([label, keywords]) => {
+            if ((keywords || []).some(keyword => content.includes(String(keyword).toLowerCase()))) {
+                labels.push(label);
+            }
+        });
+
+        if (!labels.length) {
+            return { status: 'approved', labels: [], reason: '' };
+        }
+
+        const reason = `触发自动审核规则：${labels.join('、')}`;
+        return { status: 'pending', labels, reason };
     }
 
     function normalizeStorefrontBook(raw, index = 0) {
@@ -188,12 +238,14 @@ document.addEventListener('DOMContentLoaded', async function() {
             const orderId = String(review?.orderId ?? '').trim();
             const bookId = Number(review?.bookId);
             const rating = Number(review?.rating);
+            const moderationStatus = normalizeModerationStatus(review?.moderationStatus);
 
             const reviewUserId = String(review?.userId || '').trim();
-            if (orderId && Number.isFinite(bookId)) {
+            if (orderId && Number.isFinite(bookId) && moderationStatus !== 'rejected') {
                 reviewedOrderBookKeys.add(getReviewOrderBookKey(orderId, bookId, reviewUserId));
             }
 
+            if (moderationStatus !== 'approved') return;
             if (!Number.isFinite(bookId) || !Number.isFinite(rating) || rating <= 0) return;
 
             const key = String(bookId);
@@ -223,6 +275,9 @@ document.addEventListener('DOMContentLoaded', async function() {
             rating: parsedRating,
             comment: String(raw?.comment ?? raw?.content ?? '').trim(),
             media: normalizeReviewMediaList(raw?.review_media ?? raw?.reviewMedia ?? raw?.media ?? raw?.media_assets),
+            moderationStatus: normalizeModerationStatus(raw?.moderation_status ?? raw?.moderationStatus),
+            moderationReason: String(raw?.moderation_reason ?? raw?.moderationReason ?? '').trim(),
+            moderationLabels: normalizeTextList(raw?.moderation_labels ?? raw?.moderationLabels),
             reviewerName: String(raw?.reviewer_name ?? raw?.reviewerName ?? raw?.customer_name ?? '').trim(),
             createdAt: raw?.created_at ?? raw?.createdAt ?? raw?.updated_at ?? raw?.updatedAt ?? ''
         };
@@ -537,6 +592,138 @@ document.addEventListener('DOMContentLoaded', async function() {
         };
     }
 
+    function normalizeReviewReport(raw, index = 0) {
+        const reasons = Array.isArray(raw?.reasons)
+            ? raw.reasons
+            : normalizeTextList(raw?.reasons);
+        return {
+            id: raw?.id ?? `review-report-${index}`,
+            reviewId: String(raw?.review_id ?? raw?.reviewId ?? '').trim(),
+            reporterUserId: String(raw?.reporter_user_id ?? raw?.reporterUserId ?? '').trim(),
+            reasons,
+            reasonOther: String(raw?.reason_other ?? raw?.reasonOther ?? '').trim(),
+            status: String(raw?.status || 'pending').trim().toLowerCase(),
+            resultMessage: String(raw?.result_message ?? raw?.resultMessage ?? '').trim(),
+            createdAt: raw?.created_at ?? raw?.createdAt ?? ''
+        };
+    }
+
+    function normalizeSystemMessage(raw, index = 0) {
+        return {
+            id: raw?.id ?? `system-message-${index}`,
+            userId: raw?.user_id ?? raw?.userId ?? null,
+            type: String(raw?.type || 'general').trim().toLowerCase(),
+            title: String(raw?.title || '系统通知').trim() || '系统通知',
+            content: String(raw?.content || '').trim(),
+            isRead: toBooleanFlag(raw?.is_read ?? raw?.isRead),
+            metadata: raw?.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+            createdAt: raw?.created_at ?? raw?.createdAt ?? ''
+        };
+    }
+
+    function rebuildCurrentUserReportedReviewMap() {
+        currentUserReportedReviewMap.clear();
+        const userKey = String(currentUserId || '').trim();
+        if (!userKey) return;
+
+        reviewReports.forEach(report => {
+            if (String(report?.reporterUserId || '').trim() !== userKey) return;
+            const reviewId = String(report?.reviewId || '').trim();
+            if (!reviewId) return;
+            currentUserReportedReviewMap.set(reviewId, report);
+        });
+    }
+
+    async function loadCurrentUserReviewReportsFromSupabase() {
+        reviewReports = [];
+        currentUserReportedReviewMap.clear();
+        if (!supabaseClient) return;
+        if (!String(currentUserId || '').trim()) return;
+
+        try {
+            const { data, error } = await supabaseClient
+                .from('review_reports')
+                .select('*')
+                .eq('reporter_user_id', currentUserId)
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                console.warn('Load review reports failed:', error);
+                return;
+            }
+
+            reviewReports = Array.isArray(data)
+                ? data.map((row, index) => normalizeReviewReport(row, index))
+                : [];
+            rebuildCurrentUserReportedReviewMap();
+        } catch (e) {
+            console.warn('Unexpected load review reports error:', e);
+        }
+    }
+
+    async function loadSystemMessagesFromSupabase() {
+        systemMessages = [];
+        if (!supabaseClient) {
+            updateSystemMessagesUnreadBadge();
+            return;
+        }
+
+        try {
+            const { data, error } = await supabaseClient
+                .from('system_messages')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(100);
+
+            if (error) {
+                console.warn('Load system messages failed:', error);
+                updateSystemMessagesUnreadBadge();
+                return;
+            }
+
+            const userKey = String(currentUserId || '').trim();
+            systemMessages = (Array.isArray(data) ? data : [])
+                .map((row, index) => normalizeSystemMessage(row, index))
+                .filter(message => {
+                    const targetUserId = String(message?.userId || '').trim();
+                    if (!targetUserId) return true;
+                    return userKey && targetUserId === userKey;
+                });
+            updateSystemMessagesUnreadBadge();
+        } catch (e) {
+            console.warn('Unexpected load system messages error:', e);
+            updateSystemMessagesUnreadBadge();
+        }
+    }
+
+    function getSystemMessagesUnreadCount() {
+        return (Array.isArray(systemMessages) ? systemMessages : [])
+            .filter(message => !toBooleanFlag(message?.isRead))
+            .length;
+    }
+
+    function updateSystemMessagesUnreadBadge() {
+        if (!systemMessagesUnreadBadge) return;
+        const unreadCount = isGuestUser() ? 0 : getSystemMessagesUnreadCount();
+        systemMessagesUnreadBadge.textContent = String(unreadCount);
+        systemMessagesUnreadBadge.hidden = unreadCount <= 0;
+    }
+
+    async function markSystemMessageRead(messageId) {
+        if (!supabaseClient) return;
+        const targetId = String(messageId || '').trim();
+        if (!targetId) return;
+
+        try {
+            await supabaseClient
+                .from('system_messages')
+                .update({ is_read: true })
+                .eq('id', targetId);
+        } catch (e) {
+            console.warn('Mark system message as read failed:', e);
+        }
+    }
+
     function rebuildReviewHelpfulnessCaches() {
         clearReviewHelpfulnessCaches();
         const currentUserKey = String(currentUserId || '').trim();
@@ -594,7 +781,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     function canVoteReviewHelpfulness(review) {
         if (!review?.id) return false;
         if (isGuestUser()) return false;
-        if (!String(currentUserId || '').trim()) return false;
         return !isOwnReview(review);
     }
 
@@ -672,6 +858,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         const bookId = Number(reviewPayload?.bookId);
         if (!Number.isFinite(bookId)) return { ok: false, message: '图书信息缺失，无法提交评价' };
 
+        const reviewerName = String(reviewPayload?.reviewerName || '').trim() || getCurrentDisplayUsername();
+        const moderationDecision = evaluateReviewContentModeration(reviewPayload?.comment, reviewerName);
+
         const payload = {
             order_id: String(reviewPayload?.orderId || '').trim(),
             user_id: userId,
@@ -679,7 +868,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             rating,
             comment: String(reviewPayload?.comment || '').trim() || null,
             review_media: normalizeReviewMediaList(reviewPayload?.media),
-            reviewer_name: String(reviewPayload?.reviewerName || '').trim() || null,
+            reviewer_name: reviewerName,
+            moderation_status: moderationDecision.status,
+            moderation_reason: moderationDecision.reason || null,
+            moderation_labels: moderationDecision.labels,
             updated_at: new Date().toISOString()
         };
 
@@ -691,7 +883,14 @@ document.addEventListener('DOMContentLoaded', async function() {
                 .from('book_reviews')
                 .upsert([{ ...payload, created_at: new Date().toISOString() }], { onConflict: conflict });
 
-            if (!error) return { ok: true };
+            if (!error) {
+                return {
+                    ok: true,
+                    moderationStatus: moderationDecision.status,
+                    moderationReason: moderationDecision.reason,
+                    moderationLabels: moderationDecision.labels
+                };
+            }
 
             const msg = String(error?.message || error?.details || error?.hint || '');
             const isConflictMissing = msg.includes('constraint') || msg.includes('on conflict') || msg.includes('unique') || msg.includes('there is no unique');
@@ -713,13 +912,27 @@ document.addEventListener('DOMContentLoaded', async function() {
             .eq('order_id', payload.order_id)
             .eq('book_id', payload.book_id);
 
-        if (!updateError) return { ok: true };
+        if (!updateError) {
+            return {
+                ok: true,
+                moderationStatus: moderationDecision.status,
+                moderationReason: moderationDecision.reason,
+                moderationLabels: moderationDecision.labels
+            };
+        }
 
         const { error: insertError } = await supabaseClient
             .from('book_reviews')
             .insert([{ ...payload, created_at: new Date().toISOString() }]);
 
-        if (!insertError) return { ok: true };
+        if (!insertError) {
+            return {
+                ok: true,
+                moderationStatus: moderationDecision.status,
+                moderationReason: moderationDecision.reason,
+                moderationLabels: moderationDecision.labels
+            };
+        }
 
         const finalMessage = String(insertError?.message || insertError?.details || insertError?.hint || '未知错误');
         if (finalMessage.toLowerCase().includes('row-level security') || finalMessage.toLowerCase().includes('permission denied')) {
@@ -727,6 +940,78 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         if (finalMessage.includes('relation') || finalMessage.includes('does not exist')) {
             return { ok: false, message: 'book_reviews 表不存在，请先执行建表 SQL' };
+        }
+        return { ok: false, message: finalMessage };
+    }
+
+    async function submitReviewReportToCloud(review, reasons, reasonOther = '') {
+        if (!supabaseClient) return { ok: false, message: '未连接到数据库' };
+
+        const userId = String(currentUserId || '').trim();
+        if (!userId) return { ok: false, message: '请先登录后再举报评论' };
+
+        const reviewId = String(review?.id || '').trim();
+        if (!reviewId) return { ok: false, message: '评论信息异常，无法举报' };
+        if (isOwnReview(review)) return { ok: false, message: '不能举报自己发布的评论' };
+
+        const normalizedReasons = Array.from(new Set((Array.isArray(reasons) ? reasons : []).map(item => String(item || '').trim()).filter(Boolean)));
+        if (!normalizedReasons.length) return { ok: false, message: '请至少选择一个举报原因' };
+        const normalizedOther = String(reasonOther || '').trim();
+        if (normalizedReasons.includes('other') && !normalizedOther) {
+            return { ok: false, message: '选择“其他”时请填写具体原因' };
+        }
+
+        const payload = {
+            review_id: reviewId,
+            reporter_user_id: userId,
+            reasons: normalizedReasons,
+            reason_other: normalizedOther || null,
+            status: 'pending',
+            result_message: null,
+            updated_at: new Date().toISOString()
+        };
+
+        const conflictCandidates = ['review_id,reporter_user_id', 'reporter_user_id,review_id'];
+        for (const conflict of conflictCandidates) {
+            const { error } = await supabaseClient
+                .from('review_reports')
+                .upsert([{ ...payload, created_at: new Date().toISOString() }], { onConflict: conflict });
+
+            if (!error) return { ok: true };
+
+            const msg = String(error?.message || error?.details || error?.hint || '');
+            const isConflictMissing = msg.includes('constraint') || msg.includes('on conflict') || msg.includes('unique') || msg.includes('there is no unique');
+            if (!isConflictMissing) {
+                if (msg.toLowerCase().includes('row-level security') || msg.toLowerCase().includes('permission denied')) {
+                    return { ok: false, message: 'review_reports 表权限策略未放行，请检查 Supabase RLS' };
+                }
+                if (msg.includes('relation') || msg.includes('does not exist')) {
+                    return { ok: false, message: 'review_reports 表不存在，请先执行建表 SQL' };
+                }
+                return { ok: false, message: msg || '未知错误' };
+            }
+        }
+
+        const { error: updateError } = await supabaseClient
+            .from('review_reports')
+            .update(payload)
+            .eq('review_id', reviewId)
+            .eq('reporter_user_id', userId);
+
+        if (!updateError) return { ok: true };
+
+        const { error: insertError } = await supabaseClient
+            .from('review_reports')
+            .insert([{ ...payload, created_at: new Date().toISOString() }]);
+
+        if (!insertError) return { ok: true };
+
+        const finalMessage = String(insertError?.message || insertError?.details || insertError?.hint || '未知错误');
+        if (finalMessage.toLowerCase().includes('row-level security') || finalMessage.toLowerCase().includes('permission denied')) {
+            return { ok: false, message: 'review_reports 表权限策略未放行，请检查 Supabase RLS' };
+        }
+        if (finalMessage.includes('relation') || finalMessage.includes('does not exist')) {
+            return { ok: false, message: 'review_reports 表不存在，请先执行建表 SQL' };
         }
         return { ok: false, message: finalMessage };
     }
@@ -1245,6 +1530,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     const closeHistoryBtn = document.getElementById('close-history');
     const clearHistoryBtn = document.getElementById('clear-history');
     const historyCountElement = document.querySelector('.history-count');
+    const systemMessagesSidebar = document.getElementById('system-messages-sidebar');
+    const systemMessagesItemsContainer = document.getElementById('system-messages-items');
+    const closeSystemMessagesBtn = document.getElementById('close-system-messages');
+    const systemMessagesCountElement = document.querySelector('.system-messages-count');
+    const systemMessagesUnreadBadge = document.getElementById('system-messages-unread-badge');
     const userModeBadge = document.getElementById('user-mode-badge');
     const cartOverlay = document.getElementById('cart-overlay');
     const clearCartBtn = document.getElementById('clear-cart');
@@ -1300,6 +1590,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         await loadUserOrdersFromSupabase();
         await loadBookReviewsFromSupabase();
         await loadReviewHelpfulnessVotesFromSupabase();
+        await loadCurrentUserReviewReportsFromSupabase();
+        await loadSystemMessagesFromSupabase();
         browsingHistory = loadHistoryFromStorage();
         syncCartWithVisibleBooks();
         syncHistoryWithVisibleBooks();
@@ -1308,6 +1600,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         renderFavoritesSidebar();
         renderOrdersSidebar();
         renderHistorySidebar();
+        renderSystemMessagesSidebar();
         renderCart();
         updateCartCount();
         calculateTotal();
@@ -2036,6 +2329,16 @@ document.addEventListener('DOMContentLoaded', async function() {
         const initialRating = clampRating(review?.rating || 0);
         const initialComment = String(review?.comment || '').trim();
         const initialMedia = normalizeReviewMediaList(review?.media);
+        const moderationStatus = normalizeModerationStatus(review?.moderationStatus);
+        const moderationHint = review
+            ? (moderationStatus === 'approved'
+                ? '该评价已发布'
+                : moderationStatus === 'pending'
+                    ? '该评价正在人工审核中，审核通过后会公开展示'
+                    : moderationStatus === 'rejected'
+                        ? `该评价未通过审核${review?.moderationReason ? `：${review.moderationReason}` : ''}`
+                        : '该评价当前不可见')
+            : '尚未提交评价';
         const canReviewOrder = normalizeOrderStatus(order?.status) === 'received';
 
         if (!Number.isFinite(bookId)) {
@@ -2076,8 +2379,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 </div>
                 <div class="order-review-actions">
                     <button type="button" class="btn btn-primary btn-submit-order-review" ${canReviewOrder ? '' : 'disabled'}>提交评价</button>
-                    <span class="order-review-status">${review ? `当前评分：${initialRating} 分` : '尚未提交评价'}</span>
+                    <span class="order-review-status">${review ? `当前评分：${initialRating} 分 · ${escapeHtml(getModerationStatusLabel(moderationStatus))}` : '尚未提交评价'}</span>
                 </div>
+                <div class="order-review-hint" style="margin-top:6px;">${escapeHtml(moderationHint)}</div>
             </div>
         `;
     }
@@ -2214,11 +2518,17 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
 
                 await loadBookReviewsFromSupabase();
+                await loadSystemMessagesFromSupabase();
                 renderBooks(books);
                 renderRecommendations();
                 renderOrdersSidebar();
+                renderSystemMessagesSidebar();
                 openOrderDetail(orderId, { focusReview: true });
-                showNotification('评价提交成功，已计入图书综合评分', 'success');
+                if (normalizeModerationStatus(result.moderationStatus) === 'pending') {
+                    showNotification('评价已提交，内容触发自动审核，待管理员复核后发布', 'info');
+                } else {
+                    showNotification('评价提交成功，已正常发布并计入图书综合评分', 'success');
+                }
             });
         });
     }
@@ -2354,6 +2664,47 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         });
     }
+
+    function renderSystemMessagesSidebar() {
+        if (!systemMessagesItemsContainer) return;
+        systemMessagesItemsContainer.innerHTML = '';
+        updateSystemMessagesUnreadBadge();
+
+        if (systemMessagesCountElement) {
+            systemMessagesCountElement.textContent = `${systemMessages.length} 条`;
+        }
+
+        if (!systemMessages.length) {
+            systemMessagesItemsContainer.innerHTML = '<div class="empty-cart"><p>暂无系统消息</p></div>';
+            return;
+        }
+
+        systemMessages.forEach(message => {
+            const item = document.createElement('div');
+            item.className = `cart-item system-message-item ${message.isRead ? 'read' : 'unread'}`;
+            item.dataset.id = String(message.id);
+            item.innerHTML = `
+                <div class="cart-item-details" style="width:100%;">
+                    <h4 class="cart-item-title">${escapeHtml(message.title || '系统通知')}</h4>
+                    <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${escapeHtml(formatOrderDate(message.createdAt))}</div>
+                    <div style="font-size:13px;line-height:1.7;color:#374151;">${escapeHtml(message.content || '（无内容）')}</div>
+                    <div class="cart-item-controls" style="justify-content:flex-end;">
+                        <button class="btn btn-outline mark-system-message-read" data-id="${escapeHtml(message.id)}" ${message.isRead ? 'disabled' : ''}>标记已读</button>
+                    </div>
+                </div>
+            `;
+            systemMessagesItemsContainer.appendChild(item);
+        });
+
+        systemMessagesItemsContainer.querySelectorAll('.mark-system-message-read').forEach(button => {
+            button.addEventListener('click', async function() {
+                const messageId = String(this.dataset.id || '').trim();
+                await markSystemMessageRead(messageId);
+                systemMessages = systemMessages.map(item => String(item.id) === messageId ? { ...item, isRead: true } : item);
+                renderSystemMessagesSidebar();
+            });
+        });
+    }
     
     // 添加事件监听器
     function setupEventListeners() {
@@ -2414,11 +2765,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (closeFavoritesBtn) closeFavoritesBtn.addEventListener('click', closeFavorites);
         if (closeOrdersBtn) closeOrdersBtn.addEventListener('click', closeOrders);
         if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', closeHistory);
+        if (closeSystemMessagesBtn) closeSystemMessagesBtn.addEventListener('click', closeSystemMessages);
         if (cartOverlay) cartOverlay.addEventListener('click', function() {
             closeCart();
             closeFavorites();
             closeOrders();
             closeHistory();
+            closeSystemMessages();
         });
         
         // 清空购物车
@@ -2492,6 +2845,20 @@ document.addEventListener('DOMContentLoaded', async function() {
                 e.preventDefault();
                 renderHistorySidebar();
                 openHistory();
+            });
+        }
+
+        const mySystemMessagesLink = document.getElementById('my-system-messages-link');
+        if (mySystemMessagesLink) {
+            mySystemMessagesLink.addEventListener('click', async function(e) {
+                e.preventDefault();
+                if (isGuestUser()) {
+                    showNotification('游客无法查看系统消息，请登录后使用', 'info');
+                    return;
+                }
+                await loadSystemMessagesFromSupabase();
+                renderSystemMessagesSidebar();
+                openSystemMessages();
             });
         }
 
@@ -3019,6 +3386,7 @@ if (checkoutBtn) {
         closeFavorites();
         closeOrders();
         closeHistory();
+        closeSystemMessages();
         cartSidebar.classList.add('active');
         cartOverlay.classList.add('active');
         document.body.style.overflow = 'hidden';
@@ -3027,7 +3395,7 @@ if (checkoutBtn) {
     // 关闭购物车
     function closeCart() {
         cartSidebar.classList.remove('active');
-        if ((!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!ordersSidebar || !ordersSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active'))) {
+        if ((!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!ordersSidebar || !ordersSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active')) && (!systemMessagesSidebar || !systemMessagesSidebar.classList.contains('active'))) {
             cartOverlay.classList.remove('active');
             document.body.style.overflow = 'auto';
         }
@@ -3042,6 +3410,7 @@ if (checkoutBtn) {
         closeCart();
         closeOrders();
         closeHistory();
+        closeSystemMessages();
         favoritesSidebar?.classList.add('active');
         cartOverlay.classList.add('active');
         document.body.style.overflow = 'hidden';
@@ -3049,7 +3418,7 @@ if (checkoutBtn) {
 
     function closeFavorites() {
         favoritesSidebar?.classList.remove('active');
-        if (!cartSidebar.classList.contains('active') && (!ordersSidebar || !ordersSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active'))) {
+        if (!cartSidebar.classList.contains('active') && (!ordersSidebar || !ordersSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active')) && (!systemMessagesSidebar || !systemMessagesSidebar.classList.contains('active'))) {
             cartOverlay.classList.remove('active');
             document.body.style.overflow = 'auto';
         }
@@ -3063,6 +3432,7 @@ if (checkoutBtn) {
         closeCart();
         closeFavorites();
         closeHistory();
+        closeSystemMessages();
         ordersSidebar?.classList.add('active');
         cartOverlay.classList.add('active');
         document.body.style.overflow = 'hidden';
@@ -3070,7 +3440,7 @@ if (checkoutBtn) {
 
     function closeOrders() {
         ordersSidebar?.classList.remove('active');
-        if (!cartSidebar.classList.contains('active') && (!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active'))) {
+        if (!cartSidebar.classList.contains('active') && (!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active')) && (!systemMessagesSidebar || !systemMessagesSidebar.classList.contains('active'))) {
             cartOverlay.classList.remove('active');
             document.body.style.overflow = 'auto';
         }
@@ -3080,6 +3450,7 @@ if (checkoutBtn) {
         closeCart();
         closeFavorites();
         closeOrders();
+        closeSystemMessages();
         historySidebar?.classList.add('active');
         cartOverlay.classList.add('active');
         document.body.style.overflow = 'hidden';
@@ -3087,7 +3458,30 @@ if (checkoutBtn) {
 
     function closeHistory() {
         historySidebar?.classList.remove('active');
-        if (!cartSidebar.classList.contains('active') && (!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!ordersSidebar || !ordersSidebar.classList.contains('active'))) {
+        if (!cartSidebar.classList.contains('active') && (!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!ordersSidebar || !ordersSidebar.classList.contains('active')) && (!systemMessagesSidebar || !systemMessagesSidebar.classList.contains('active'))) {
+            cartOverlay.classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+    }
+
+    function openSystemMessages() {
+        if (isGuestUser()) {
+            showNotification('游客无法查看系统消息，请登录后使用', 'info');
+            return;
+        }
+        closeCart();
+        closeFavorites();
+        closeOrders();
+        closeHistory();
+        renderSystemMessagesSidebar();
+        systemMessagesSidebar?.classList.add('active');
+        cartOverlay.classList.add('active');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeSystemMessages() {
+        systemMessagesSidebar?.classList.remove('active');
+        if (!cartSidebar.classList.contains('active') && (!favoritesSidebar || !favoritesSidebar.classList.contains('active')) && (!ordersSidebar || !ordersSidebar.classList.contains('active')) && (!historySidebar || !historySidebar.classList.contains('active'))) {
             cartOverlay.classList.remove('active');
             document.body.style.overflow = 'auto';
         }
@@ -3470,7 +3864,7 @@ if (checkoutBtn) {
         const targetBookId = Number(bookId);
         if (!Number.isFinite(targetBookId)) return [];
         return (Array.isArray(bookReviews) ? bookReviews : [])
-            .filter(review => Number(review?.bookId) === targetBookId && Number(review?.rating) > 0)
+            .filter(review => Number(review?.bookId) === targetBookId && Number(review?.rating) > 0 && normalizeModerationStatus(review?.moderationStatus) === 'approved')
             .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
             .slice(0, limit);
     }
@@ -3480,6 +3874,19 @@ if (checkoutBtn) {
         if (isGuestUser()) return '登录后可标记这条评价是否有帮助';
         if (!String(currentUserId || '').trim()) return '当前账号未建立云端会话，暂不可投票';
         return '这条评价对你有帮助吗？';
+    }
+
+    function getReviewReportHint(review) {
+        if (isOwnReview(review)) return '这是你发布的评价，不能举报自己';
+        if (isGuestUser()) return '登录后可举报争议评论';
+        if (!String(currentUserId || '').trim()) return '当前账号未建立云端会话，暂不可举报';
+
+        const report = currentUserReportedReviewMap.get(String(review?.id || '').trim());
+        if (!report) return '发现争议内容可发起举报';
+        if (report.status === 'pending') return '你已举报，管理员处理中';
+        if (report.status === 'resolved_hidden') return '举报已处理：评论已被隐藏';
+        if (report.status === 'resolved_rejected') return '举报已处理：管理员驳回举报';
+        return '你已提交过举报，可再次修改原因';
     }
 
     function renderBookReviewsSection(book) {
@@ -3499,6 +3906,9 @@ if (checkoutBtn) {
                     const stats = getReviewHelpfulnessStats(review?.id);
                     const canVote = canVoteReviewHelpfulness(review);
                     const reviewId = escapeHtml(String(review?.id || ''));
+                    const existingReport = currentUserReportedReviewMap.get(String(review?.id || '').trim());
+                    const existingReasons = Array.isArray(existingReport?.reasons) ? existingReport.reasons : [];
+                    const canReport = !isOwnReview(review) && !isGuestUser() && Boolean(String(currentUserId || '').trim());
                     return `
                         <div class="book-review-item">
                             <div class="book-review-header">
@@ -3523,6 +3933,34 @@ if (checkoutBtn) {
                                     </button>
                                 </div>
                             </div>
+                            <div class="book-review-report">
+                                <button type="button" class="btn btn-outline btn-open-review-report" data-review-id="${reviewId}" aria-expanded="false" ${isOwnReview(review) ? 'disabled' : ''}>举报</button>
+                                <div class="book-review-report-body" data-review-id="${reviewId}" hidden>
+                                    <div class="book-review-helpfulness-label">${escapeHtml(getReviewReportHint(review))}</div>
+                                    <form class="review-report-form" data-review-id="${reviewId}">
+                                        <div class="review-report-reasons">
+                                            ${[
+                                                { value: 'violence', label: '暴力/血腥' },
+                                                { value: 'sexual', label: '色情/低俗' },
+                                                { value: 'political', label: '政治敏感' },
+                                                { value: 'malicious', label: '恶意攻击/辱骂' },
+                                                { value: 'spam', label: '广告/垃圾信息' },
+                                                { value: 'other', label: '其他' }
+                                            ].map(reason => `
+                                                <label>
+                                                    <input type="checkbox" name="report-reason" value="${reason.value}" ${existingReasons.includes(reason.value) ? 'checked' : ''}>
+                                                    <span>${reason.label}</span>
+                                                </label>
+                                            `).join('')}
+                                        </div>
+                                        <textarea class="review-report-other" rows="2" maxlength="200" placeholder="若选择“其他”，请填写具体原因">${escapeHtml(existingReport?.reasonOther || '')}</textarea>
+                                        <div class="review-report-actions">
+                                            <button type="submit" class="btn btn-primary" ${canReport ? '' : 'disabled'}>提交举报</button>
+                                            <button type="button" class="btn btn-outline btn-cancel-review-report">取消</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
                         </div>
                     `;
                 }).join('')}
@@ -3535,6 +3973,81 @@ if (checkoutBtn) {
         container.innerHTML = renderBookReviewsSection(book);
         bindBookReviewHelpfulnessInteractions(container, book);
         bindBookReviewMediaInteractions(container, book);
+        bindBookReviewReportInteractions(container, book);
+    }
+
+    function bindBookReviewReportInteractions(container, book) {
+        if (!container) return;
+
+        container.querySelectorAll('.btn-open-review-report').forEach(button => {
+            button.addEventListener('click', function() {
+                const reviewId = String(this.dataset.reviewId || '').trim();
+                const reportBody = container.querySelector(`.book-review-report-body[data-review-id="${reviewId}"]`);
+                if (!reportBody) return;
+                const nextHidden = !reportBody.hidden;
+                reportBody.hidden = nextHidden;
+                this.setAttribute('aria-expanded', nextHidden ? 'false' : 'true');
+                this.textContent = nextHidden ? '举报' : '收起';
+            });
+        });
+
+        container.querySelectorAll('.btn-cancel-review-report').forEach(button => {
+            button.addEventListener('click', function() {
+                const form = this.closest('.review-report-form');
+                if (!form) return;
+                const reportBody = form.closest('.book-review-report-body');
+                if (reportBody) {
+                    reportBody.hidden = true;
+                    const reviewId = String(reportBody.dataset.reviewId || '').trim();
+                    const toggleButton = container.querySelector(`.btn-open-review-report[data-review-id="${reviewId}"]`);
+                    if (toggleButton) {
+                        toggleButton.setAttribute('aria-expanded', 'false');
+                        toggleButton.textContent = '举报';
+                    }
+                }
+            });
+        });
+
+        container.querySelectorAll('.review-report-form').forEach(form => {
+            form.addEventListener('submit', async function(event) {
+                event.preventDefault();
+
+                if (isGuestUser()) {
+                    showNotification('游客无法举报评论，请登录后再操作', 'info');
+                    return;
+                }
+
+                if (!String(currentUserId || '').trim()) {
+                    currentUserId = await getCurrentSupabaseUserId();
+                }
+
+                const reviewId = String(this.dataset.reviewId || '').trim();
+                const review = getBookReviewsForDisplay(book?.id, 100).find(item => String(item?.id || '').trim() === reviewId);
+                if (!review) {
+                    showNotification('未找到对应评论，可能已更新，请刷新后重试', 'info');
+                    return;
+                }
+
+                const reasons = Array.from(this.querySelectorAll('input[name="report-reason"]:checked')).map(input => String(input.value || '').trim());
+                const otherReason = String(this.querySelector('.review-report-other')?.value || '').trim();
+
+                const submitButton = this.querySelector('button[type="submit"]');
+                if (submitButton) submitButton.disabled = true;
+                const result = await submitReviewReportToCloud(review, reasons, otherReason);
+                if (submitButton) submitButton.disabled = false;
+
+                if (!result.ok) {
+                    showNotification(`举报失败：${result.message}`, 'info');
+                    return;
+                }
+
+                await loadCurrentUserReviewReportsFromSupabase();
+                await loadSystemMessagesFromSupabase();
+                renderBookReviewContent(container, book);
+                renderSystemMessagesSidebar();
+                showNotification('举报已提交，管理员将尽快处理', 'success');
+            });
+        });
     }
 
     function bindBookReviewMediaInteractions(container, book) {
@@ -3557,6 +4070,9 @@ if (checkoutBtn) {
 
         container.querySelectorAll('.review-helpfulness-btn').forEach(button => {
             button.addEventListener('click', async function() {
+                if (!String(currentUserId || '').trim()) {
+                    currentUserId = await getCurrentSupabaseUserId();
+                }
                 const reviewId = String(this.dataset.reviewId || '').trim();
                 const helpfulFlag = this.dataset.helpful === 'true';
                 const currentVote = getReviewHelpfulnessStats(reviewId).currentUserVote;
@@ -4514,6 +5030,76 @@ if (checkoutBtn) {
             gap: 10px;
         }
 
+        .book-review-report {
+            margin-top: 10px;
+            display: grid;
+            gap: 8px;
+            justify-items: start;
+        }
+
+        .btn-open-review-report {
+            padding: 3px 10px;
+            font-size: 12px;
+            line-height: 1.3;
+            border-radius: 999px;
+            min-height: 28px;
+        }
+
+        .book-review-report-body {
+            width: 100%;
+            display: grid;
+            gap: 8px;
+        }
+
+        .book-review-report-body[hidden] {
+            display: none !important;
+        }
+
+        .review-report-form {
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 12px;
+            padding: 10px;
+            display: grid;
+            gap: 10px;
+            background: #fdfcf8;
+        }
+
+        .review-report-reasons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+        }
+
+        .review-report-reasons label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #4b5563;
+            padding: 6px 8px;
+            border-radius: 999px;
+            background: #fff;
+            border: 1px solid rgba(15, 23, 42, 0.1);
+        }
+
+        .review-report-other {
+            width: 100%;
+            border: 1px solid rgba(15, 23, 42, 0.12);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font: inherit;
+            resize: vertical;
+            min-height: 56px;
+            background: #fff;
+        }
+
+        .review-report-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
         .book-review-helpfulness-label {
             font-size: 12px;
             color: #6b7280;
@@ -4554,6 +5140,36 @@ if (checkoutBtn) {
             cursor: not-allowed;
             opacity: 0.72;
             background: #f8fafc;
+        }
+
+        .system-message-item.unread {
+            border-left: 3px solid #8c5a30;
+            background: #fffaf0;
+        }
+
+        .system-message-item.read {
+            opacity: 0.92;
+        }
+
+        .system-message-unread-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 6px;
+            margin-left: 6px;
+            border-radius: 999px;
+            background: #ef4444;
+            color: #ffffff;
+            font-size: 11px;
+            line-height: 1;
+            font-weight: 700;
+            vertical-align: middle;
+        }
+
+        .system-message-unread-badge[hidden] {
+            display: none !important;
         }
 
         .order-review-actions {
@@ -4748,6 +5364,17 @@ function applyGuestUIRestrictions() {
             } else {
                 myOrdersLink.classList.remove('disabled');
                 myOrdersLink.removeAttribute('title');
+            }
+        }
+
+        const mySystemMessagesLink = document.getElementById('my-system-messages-link');
+        if (mySystemMessagesLink) {
+            if (guest) {
+                mySystemMessagesLink.classList.add('disabled');
+                mySystemMessagesLink.setAttribute('title', '游客无法查看系统消息');
+            } else {
+                mySystemMessagesLink.classList.remove('disabled');
+                mySystemMessagesLink.removeAttribute('title');
             }
         }
     } catch (e) {

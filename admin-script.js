@@ -41,6 +41,8 @@ let ordersFilteredOrders = [];    // 存储当前订单列表（全量或状态�
 
     let books = [];
     let orders = [];
+    let moderationReviews = [];
+    let moderationReports = [];
     let editingProductId = null;
     let editingPhotos = [];
 
@@ -50,6 +52,7 @@ let ordersFilteredOrders = [];    // 存储当前订单列表（全量或状态�
         searchBtn: document.getElementById('admin-search-btn'),
         booksGrid: document.getElementById('admin-products-grid'),
         ordersList: document.getElementById('admin-orders-list'),
+        moderationPanel: document.getElementById('admin-moderation-panel'),
         productModal: document.getElementById('product-modal'),
         productForm: document.getElementById('product-form'),
         logoutBtn: document.getElementById('logout-btn')
@@ -462,6 +465,334 @@ function renderProductsPagination() {
 
         persistOrders();
     }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    function normalizeModerationStatus(value) {
+        const raw = String(value || '').trim().toLowerCase();
+        if (['pending', 'reviewing', 'manual_review'].includes(raw)) return 'pending';
+        if (['rejected', 'deny', 'denied'].includes(raw)) return 'rejected';
+        if (['hidden', 'removed'].includes(raw)) return 'hidden';
+        return 'approved';
+    }
+
+    function formatReasonList(reasons, reasonOther = '') {
+        const map = {
+            violence: '暴力/血腥',
+            sexual: '色情/低俗',
+            political: '政治敏感',
+            malicious: '恶意攻击/辱骂',
+            spam: '广告/垃圾信息',
+            other: '其他'
+        };
+        const labels = (Array.isArray(reasons) ? reasons : [])
+            .map(item => map[String(item || '').trim()] || String(item || '').trim())
+            .filter(Boolean);
+        if (reasonOther) labels.push(`其他说明：${reasonOther}`);
+        return labels.join('；') || '未填写原因';
+    }
+
+    function toMessageType(value) {
+        return String(value || 'general').trim().toLowerCase();
+    }
+
+    async function sendSystemMessageToUser(userId, title, content, type = 'general', metadata = null) {
+        if (!client) return { ok: false, message: 'Supabase 客户端未初始化' };
+
+        const baseMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+
+        const payload = {
+            user_id: userId || null,
+            type: toMessageType(type),
+            title: String(title || '系统通知').trim() || '系统通知',
+            content: String(content || '').trim() || '系统通知',
+            is_read: false,
+            metadata: { ...baseMetadata, source: 'admin' },
+            created_at: new Date().toISOString()
+        };
+
+        const { error } = await client.from('system_messages').insert([payload]);
+        if (error) {
+            console.warn('send system message failed:', error);
+            const msg = String(error?.message || error?.details || error?.hint || '未知错误');
+            if (msg.toLowerCase().includes('row-level security') || msg.toLowerCase().includes('permission denied')) {
+                return { ok: false, message: 'RLS 权限拦截：请执行无后端前端直写策略 SQL（system_messages 插入策略）' };
+            }
+            return { ok: false, message: msg };
+        }
+
+        return { ok: true };
+    }
+
+    async function loadModerationData() {
+        moderationReviews = [];
+        moderationReports = [];
+        if (!client) {
+            renderModerationPanel();
+            return;
+        }
+
+        try {
+            const { data: reviewRows, error: reviewError } = await client
+                .from('book_reviews')
+                .select('*')
+                .in('moderation_status', ['pending'])
+                .order('created_at', { ascending: true });
+
+            if (reviewError) {
+                console.warn('load moderation reviews failed:', reviewError);
+            } else {
+                moderationReviews = Array.isArray(reviewRows) ? reviewRows : [];
+            }
+
+            const { data: reportRows, error: reportError } = await client
+                .from('review_reports')
+                .select('*')
+                .eq('status', 'pending')
+                .order('created_at', { ascending: true });
+
+            if (reportError) {
+                console.warn('load moderation reports failed:', reportError);
+            } else {
+                moderationReports = Array.isArray(reportRows) ? reportRows : [];
+            }
+        } catch (error) {
+            console.warn('load moderation data error:', error);
+        }
+
+        renderModerationPanel();
+    }
+
+    async function handleReviewModerationDecision(reviewId, decision, reason = '') {
+        if (!client) return;
+        const targetReview = moderationReviews.find(item => String(item?.id) === String(reviewId));
+        if (!targetReview) return;
+
+        const status = decision === 'approve' ? 'approved' : 'rejected';
+        const normalizedReason = String(reason || '').trim();
+        const payload = {
+            moderation_status: status,
+            moderation_reason: normalizedReason || (status === 'approved' ? '管理员审核通过' : '管理员审核未通过'),
+            moderated_at: new Date().toISOString(),
+            moderated_by: String(sessionStorage.getItem('username') || sessionStorage.getItem('loginUsername') || 'merchant').trim()
+        };
+
+        const { error } = await client
+            .from('book_reviews')
+            .update(payload)
+            .eq('id', reviewId);
+
+        if (error) {
+            alert(`处理失败：${error.message || '未知错误'}`);
+            return;
+        }
+
+        const userId = String(targetReview?.user_id || '').trim();
+        if (userId) {
+            await sendSystemMessageToUser(
+                userId,
+                status === 'approved' ? '评论审核通过' : '评论审核未通过',
+                status === 'approved'
+                    ? '你提交的评论已审核通过并公开展示。'
+                    : `你提交的评论未通过审核。${payload.moderation_reason ? `原因：${payload.moderation_reason}` : ''}`,
+                'review_moderation',
+                { reviewId: String(reviewId), status }
+            );
+        }
+
+        await loadModerationData();
+    }
+
+    async function handleReportDecision(reportId, decision, reason = '') {
+        if (!client) return;
+        const targetReport = moderationReports.find(item => String(item?.id) === String(reportId));
+        if (!targetReport) return;
+
+        const reportStatus = decision === 'hide' ? 'resolved_hidden' : 'resolved_rejected';
+        const normalizedReason = String(reason || '').trim();
+        const resultMessage = normalizedReason || (decision === 'hide' ? '举报成立，评论已隐藏' : '举报不成立，管理员驳回');
+
+        const { error: updateReportError } = await client
+            .from('review_reports')
+            .update({
+                status: reportStatus,
+                result_message: resultMessage,
+                resolved_at: new Date().toISOString(),
+                resolved_by: String(sessionStorage.getItem('username') || sessionStorage.getItem('loginUsername') || 'merchant').trim()
+            })
+            .eq('id', reportId);
+
+        if (updateReportError) {
+            alert(`处理举报失败：${updateReportError.message || '未知错误'}`);
+            return;
+        }
+
+        if (decision === 'hide') {
+            const { error: hideReviewError } = await client
+                .from('book_reviews')
+                .update({
+                    moderation_status: 'hidden',
+                    moderation_reason: resultMessage,
+                    moderated_at: new Date().toISOString(),
+                    moderated_by: String(sessionStorage.getItem('username') || sessionStorage.getItem('loginUsername') || 'merchant').trim()
+                })
+                .eq('id', targetReport.review_id);
+
+            if (hideReviewError) {
+                alert(`隐藏评论失败：${hideReviewError.message || '未知错误'}`);
+                return;
+            }
+        }
+
+        const reporterUserId = String(targetReport?.reporter_user_id || '').trim();
+        if (reporterUserId) {
+            await sendSystemMessageToUser(
+                reporterUserId,
+                '举报处理结果',
+                decision === 'hide'
+                    ? '你举报的评论已被管理员处理并隐藏。'
+                    : `你举报的评论已被管理员驳回。${resultMessage ? `说明：${resultMessage}` : ''}`,
+                'report_result',
+                { reportId: String(reportId), decision: reportStatus }
+            );
+        }
+
+        if (decision === 'hide') {
+            const reviewOwnerId = String(targetReport?.review_owner_user_id || '').trim();
+            if (reviewOwnerId) {
+                await sendSystemMessageToUser(
+                    reviewOwnerId,
+                    '评论被隐藏',
+                    `你的评论因被举报已被管理员隐藏。${resultMessage ? `原因：${resultMessage}` : ''}`,
+                    'review_moderation',
+                    { reviewId: String(targetReport.review_id), status: 'hidden' }
+                );
+            }
+        }
+
+        await loadModerationData();
+    }
+
+    function renderModerationPanel() {
+        const panel = elements.moderationPanel;
+        if (!panel) return;
+
+        const pendingReviewsHtml = moderationReviews.length
+            ? moderationReviews.map(review => {
+                const comment = String(review?.comment || '').trim() || '（无评论正文）';
+                const labels = Array.isArray(review?.moderation_labels) ? review.moderation_labels.join('、') : '';
+                return `
+                    <div class="admin-moderation-card" data-review-id="${escapeHtml(review.id)}">
+                        <div class="admin-moderation-title">待审核评论 #${escapeHtml(review.id)}</div>
+                        <div class="admin-moderation-meta">图书ID：${escapeHtml(review.book_id)} · 用户：${escapeHtml(review.reviewer_name || review.user_id || '未知用户')} · 提交时间：${formatDate(review.created_at)}</div>
+                        <div class="admin-moderation-comment">${escapeHtml(comment)}</div>
+                        <div class="admin-moderation-meta">自动触发：${escapeHtml(labels || review.moderation_reason || '未知规则')}</div>
+                        <textarea class="admin-moderation-reason" rows="2" placeholder="可选：填写审核说明（将发送给用户）"></textarea>
+                        <div class="admin-card-actions">
+                            <button class="btn btn-primary moderation-approve-btn" data-review-id="${escapeHtml(review.id)}">审核通过</button>
+                            <button class="btn btn-outline moderation-reject-btn" data-review-id="${escapeHtml(review.id)}">驳回评论</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')
+            : '<div class="empty-state">暂无待审核评论</div>';
+
+        const pendingReportsHtml = moderationReports.length
+            ? moderationReports.map(report => {
+                const reasons = formatReasonList(report?.reasons, report?.reason_other);
+                return `
+                    <div class="admin-moderation-card" data-report-id="${escapeHtml(report.id)}">
+                        <div class="admin-moderation-title">待处理举报 #${escapeHtml(report.id)}</div>
+                        <div class="admin-moderation-meta">评论ID：${escapeHtml(report.review_id)} · 举报人：${escapeHtml(report.reporter_user_id || '未知用户')} · 提交时间：${formatDate(report.created_at)}</div>
+                        <div class="admin-moderation-comment">举报原因：${escapeHtml(reasons)}</div>
+                        <textarea class="admin-report-decision-reason" rows="2" placeholder="可选：处理说明（驳回时会发送给举报用户）"></textarea>
+                        <div class="admin-card-actions">
+                            <button class="btn btn-primary report-hide-btn" data-report-id="${escapeHtml(report.id)}">通过举报并隐藏评论</button>
+                            <button class="btn btn-outline report-reject-btn" data-report-id="${escapeHtml(report.id)}">驳回举报</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')
+            : '<div class="empty-state">暂无待处理举报</div>';
+
+        panel.innerHTML = `
+            <div class="admin-moderation-layout">
+                <div>
+                    <h3>自动审核待处理</h3>
+                    <div class="admin-moderation-list">${pendingReviewsHtml}</div>
+                </div>
+                <div>
+                    <h3>用户举报待处理</h3>
+                    <div class="admin-moderation-list">${pendingReportsHtml}</div>
+                </div>
+            </div>
+            <div class="admin-moderation-broadcast">
+                <h3>发布系统消息</h3>
+                <div class="admin-form-grid">
+                    <input id="admin-message-user-id" type="text" placeholder="用户ID（留空=全站广播）">
+                    <input id="admin-message-title" type="text" placeholder="消息标题">
+                    <textarea id="admin-message-content" class="full" rows="3" placeholder="消息内容"></textarea>
+                </div>
+                <div class="admin-card-actions" style="margin-top:10px;">
+                    <button class="btn btn-primary" id="admin-send-message-btn">发送消息</button>
+                </div>
+            </div>
+        `;
+
+        panel.querySelectorAll('.moderation-approve-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+                const reviewId = button.dataset.reviewId;
+                const reason = button.closest('.admin-moderation-card')?.querySelector('.admin-moderation-reason')?.value || '';
+                await handleReviewModerationDecision(reviewId, 'approve', reason);
+            });
+        });
+
+        panel.querySelectorAll('.moderation-reject-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+                const reviewId = button.dataset.reviewId;
+                const reason = button.closest('.admin-moderation-card')?.querySelector('.admin-moderation-reason')?.value || '';
+                await handleReviewModerationDecision(reviewId, 'reject', reason);
+            });
+        });
+
+        panel.querySelectorAll('.report-hide-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+                const reportId = button.dataset.reportId;
+                const reason = button.closest('.admin-moderation-card')?.querySelector('.admin-report-decision-reason')?.value || '';
+                await handleReportDecision(reportId, 'hide', reason);
+            });
+        });
+
+        panel.querySelectorAll('.report-reject-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+                const reportId = button.dataset.reportId;
+                const reason = button.closest('.admin-moderation-card')?.querySelector('.admin-report-decision-reason')?.value || '';
+                await handleReportDecision(reportId, 'reject', reason);
+            });
+        });
+
+        panel.querySelector('#admin-send-message-btn')?.addEventListener('click', async () => {
+            const userId = String(panel.querySelector('#admin-message-user-id')?.value || '').trim() || null;
+            const title = String(panel.querySelector('#admin-message-title')?.value || '').trim();
+            const content = String(panel.querySelector('#admin-message-content')?.value || '').trim();
+
+            if (!title || !content) {
+                alert('请填写消息标题和内容');
+                return;
+            }
+
+            const result = await sendSystemMessageToUser(userId, title, content, 'merchant_notice', { source: 'admin' });
+            if (!result?.ok) {
+                alert(`系统消息发送失败：${result?.message || '未知错误'}`);
+                return;
+            }
+            panel.querySelector('#admin-message-title').value = '';
+            panel.querySelector('#admin-message-content').value = '';
+            alert('系统消息已发送');
+        });
+    }
 // 渲染当前页订单
 function renderOrdersWithPagination() {
 	    if (!elements.ordersList) return;
@@ -560,7 +891,15 @@ function persistBooks() {
                 .photo-preview-item img{width:100%;height:120px;object-fit:cover;border-radius:8px;background:#f1f5f9;}
                 .admin-toolbar{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin:12px 0 20px;}
                 .admin-filter-bar{display:flex;gap:8px;flex-wrap:wrap;}
-                @media (max-width:768px){.admin-form-grid{grid-template-columns:1fr;}}
+                .admin-moderation-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+                .admin-moderation-list{display:grid;gap:12px;}
+                .admin-moderation-card{background:#fff;border-radius:14px;padding:14px;border:1px solid #e5e7eb;display:grid;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,.05);}
+                .admin-moderation-title{font-weight:700;color:#374151;}
+                .admin-moderation-meta{font-size:12px;color:#6b7280;line-height:1.6;word-break:break-all;}
+                .admin-moderation-comment{font-size:13px;color:#374151;line-height:1.7;background:#f9fafb;border-radius:10px;padding:10px;white-space:pre-wrap;word-break:break-word;}
+                .admin-moderation-reason,.admin-report-decision-reason{width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;resize:vertical;}
+                .admin-moderation-broadcast{margin-top:18px;background:#fff;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.05);}
+                @media (max-width:768px){.admin-form-grid{grid-template-columns:1fr;}.admin-moderation-layout{grid-template-columns:1fr;}}
             `;
             document.head.appendChild(style);
 			    if (!document.getElementById('products-pagination')) {
@@ -657,7 +996,7 @@ function persistBooks() {
     }
 
     function activateAdminSection(sectionId) {
-        const targetId = sectionId === 'orders' ? 'orders' : 'products';
+        const targetId = ['products', 'orders', 'moderation'].includes(sectionId) ? sectionId : 'products';
         document.body.classList.add('admin-tabbed');
 
         document.querySelectorAll('.admin-section').forEach(section => {
@@ -1246,6 +1585,7 @@ document.querySelectorAll('.admin-order-filter').forEach(button => {
     initAdminSectionTabs();
     await loadBooks();
     await loadOrders();
+    await loadModerationData();
 
     bindEvents();
 });

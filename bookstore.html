@@ -44,6 +44,7 @@
                             <a href="#" id="my-favorites-link"><i class="fas fa-heart"></i> 我的收藏</a>
                             <a href="#" id="my-orders-link"><i class="fas fa-box"></i> 订单查询</a>
                             <a href="#" id="my-history-link"><i class="fas fa-history"></i> 浏览历史</a>
+                            <a href="#" id="my-system-messages-link"><i class="fas fa-bell"></i> 系统消息 <span id="system-messages-unread-badge" class="system-message-unread-badge" hidden>0</span></a>
                             <a href="account.html" id="account-settings-link"><i class="fas fa-cog"></i> 账户设置</a>
                             <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> 退出登录</a>
                         </div>
@@ -257,6 +258,26 @@
                     <span class="history-count">0 条</span>
                 </div>
                 <button class="btn btn-outline btn-block" id="clear-history">清空历史</button>
+            </div>
+        </aside>
+
+        <aside class="cart-sidebar" id="system-messages-sidebar">
+            <div class="cart-header">
+                <h3><i class="fas fa-bell"></i> 系统消息</h3>
+                <button class="close-cart" id="close-system-messages">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="cart-items" id="system-messages-items">
+                <!-- 系统消息将通过 JavaScript 动态生成 -->
+            </div>
+
+            <div class="cart-footer">
+                <div class="cart-total">
+                    <span>消息数：</span>
+                    <span class="system-messages-count">0 条</span>
+                </div>
             </div>
         </aside>
         
