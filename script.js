@@ -28,20 +28,37 @@ document.addEventListener('DOMContentLoaded', async function() {
     let recommendations = [];
     let userOrders = [];
     let bookReviews = [];
+    let reviewHelpfulnessVotes = [];
     let currentUserId = null;
     let currentOrderFilter = 'all';
     let browsingHistory = [];
     let detailGalleryAutoplayTimer = null;
     const DETAIL_GALLERY_INTERVAL_MS = 2000;
+    const REVIEW_MEDIA_MAX_FILES = 4;
+    const REVIEW_MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+    const REVIEW_MEDIA_MAX_VIDEO_BYTES = 15 * 1024 * 1024;
+    const REVIEW_MEDIA_TOTAL_BYTES_LIMIT = 20 * 1024 * 1024;
     const favoriteBookIds = new Set();
     const reviewedOrderBookKeys = new Set();
     const bookRatingStatsMap = new Map();
+    const reviewHelpfulnessStatsMap = new Map();
+    const currentUserReviewVoteMap = new Map();
+    const orderReviewMediaDraftMap = new Map();
     const cartItems = [];
 
     function stopDetailGalleryAutoplay() {
         if (!detailGalleryAutoplayTimer) return;
         clearInterval(detailGalleryAutoplayTimer);
         detailGalleryAutoplayTimer = null;
+    }
+
+    function syncDetailOpenState() {
+        const hasActiveModal = Boolean(
+            document.querySelector('#book-detail-modal.active')
+            || document.querySelector('#order-detail-modal.active')
+            || document.querySelector('#review-media-gallery-modal.active')
+        );
+        document.body.classList.toggle('detail-open', hasActiveModal);
     }
 
     function normalizeOrderStatus(status) {
@@ -73,6 +90,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (typeof value === 'boolean') return value;
         const normalized = String(value ?? '').trim().toLowerCase();
         return ['true', '1', 'yes', 'y', 'on'].includes(normalized);
+    }
+
+    function toNullableBoolean(value) {
+        if (typeof value === 'boolean') return value;
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (['true', '1', 'yes', 'y', 'on', 'helpful', 'up'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'n', 'off', 'not_helpful', 'not-helpful', 'unhelpful', 'down'].includes(normalized)) return false;
+        return null;
     }
 
     function normalizeStorefrontBook(raw, index = 0) {
@@ -150,6 +175,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         bookRatingStatsMap.clear();
     }
 
+    function clearReviewHelpfulnessCaches() {
+        reviewHelpfulnessStatsMap.clear();
+        currentUserReviewVoteMap.clear();
+    }
+
     function rebuildReviewCaches() {
         clearReviewCaches();
         const statBuckets = new Map();
@@ -192,9 +222,366 @@ document.addEventListener('DOMContentLoaded', async function() {
             bookId: Number.isFinite(parsedBookId) ? parsedBookId : null,
             rating: parsedRating,
             comment: String(raw?.comment ?? raw?.content ?? '').trim(),
+            media: normalizeReviewMediaList(raw?.review_media ?? raw?.reviewMedia ?? raw?.media ?? raw?.media_assets),
             reviewerName: String(raw?.reviewer_name ?? raw?.reviewerName ?? raw?.customer_name ?? '').trim(),
             createdAt: raw?.created_at ?? raw?.createdAt ?? raw?.updated_at ?? raw?.updatedAt ?? ''
         };
+    }
+
+    function createClientSideId(prefix = 'id') {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return `${prefix}-${crypto.randomUUID()}`;
+        }
+        return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    function inferReviewMediaKind(value, mimeType = '') {
+        const text = String(value || '').trim().toLowerCase();
+        const mime = String(mimeType || '').trim().toLowerCase();
+        if (['image', 'video'].includes(text)) return text;
+        if (mime.startsWith('image/')) return 'image';
+        if (mime.startsWith('video/')) return 'video';
+        if (/^data:image\//i.test(text)) return 'image';
+        if (/^data:video\//i.test(text)) return 'video';
+        if (/\.(png|jpg|jpeg|gif|webp|bmp|svg)(\?|#|$)/i.test(text)) return 'image';
+        if (/\.(mp4|webm|ogg|mov|m4v)(\?|#|$)/i.test(text)) return 'video';
+        return '';
+    }
+
+    function sanitizeReviewMediaUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        if (/^javascript:/i.test(raw)) return '';
+        if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw) || /^data:video\//i.test(raw) || /^blob:/i.test(raw) || raw.startsWith('/')) {
+            return raw;
+        }
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+        return '';
+    }
+
+    function normalizeReviewMediaItem(raw, index = 0) {
+        if (!raw) return null;
+
+        if (typeof raw === 'string') {
+            const src = sanitizeReviewMediaUrl(raw);
+            const kind = inferReviewMediaKind(src);
+            if (!src || !kind) return null;
+            return {
+                id: createClientSideId(`review-media-${index}`),
+                kind,
+                mimeType: kind === 'image' ? 'image/*' : 'video/*',
+                name: `${kind}-${index + 1}`,
+                size: 0,
+                src
+            };
+        }
+
+        const src = sanitizeReviewMediaUrl(raw?.src ?? raw?.url ?? raw?.dataUrl ?? raw?.data_url ?? '');
+        const mimeType = String(raw?.mimeType ?? raw?.mime_type ?? '').trim();
+        const kind = inferReviewMediaKind(raw?.kind ?? raw?.type, mimeType) || inferReviewMediaKind(src, mimeType);
+        if (!src || !kind) return null;
+
+        return {
+            id: String(raw?.id || createClientSideId(`review-media-${index}`)),
+            kind,
+            mimeType: mimeType || (kind === 'image' ? 'image/*' : 'video/*'),
+            name: String(raw?.name || `${kind}-${index + 1}`),
+            size: Number(raw?.size || 0) || 0,
+            src
+        };
+    }
+
+    function normalizeReviewMediaList(value) {
+        let source = value;
+        if (typeof source === 'string') {
+            const trimmed = source.trim();
+            if (!trimmed) return [];
+            try {
+                source = JSON.parse(trimmed);
+            } catch {
+                source = [trimmed];
+            }
+        }
+
+        if (!Array.isArray(source)) return [];
+
+        const seen = new Set();
+        return source
+            .map((item, index) => normalizeReviewMediaItem(item, index))
+            .filter(item => {
+                if (!item?.src || seen.has(item.src)) return false;
+                seen.add(item.src);
+                return true;
+            });
+    }
+
+    function getReviewMediaDraftKey(orderId, bookId) {
+        return `${String(orderId || '').trim()}::${String(bookId || '').trim()}`;
+    }
+
+    function setOrderReviewMediaDraft(orderId, bookId, mediaList) {
+        const key = getReviewMediaDraftKey(orderId, bookId);
+        orderReviewMediaDraftMap.set(key, normalizeReviewMediaList(mediaList));
+    }
+
+    function getOrderReviewMediaDraft(orderId, bookId) {
+        const key = getReviewMediaDraftKey(orderId, bookId);
+        return normalizeReviewMediaList(orderReviewMediaDraftMap.get(key) || []);
+    }
+
+    function formatFileSize(bytes) {
+        const size = Number(bytes || 0);
+        if (!Number.isFinite(size) || size <= 0) return '0 B';
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+        return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function getReviewMediaTotalBytes(mediaList) {
+        return normalizeReviewMediaList(mediaList).reduce((total, item) => total + (Number(item?.size || 0) || 0), 0);
+    }
+
+    function readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async function convertFilesToReviewMedia(fileList, existingMedia = []) {
+        const files = Array.from(fileList || []);
+        const existing = normalizeReviewMediaList(existingMedia);
+        const nextItems = [];
+        const messages = [];
+        let totalBytes = getReviewMediaTotalBytes(existing);
+        const availableSlots = Math.max(0, REVIEW_MEDIA_MAX_FILES - existing.length);
+
+        if (!files.length) {
+            return { media: [], message: '' };
+        }
+
+        if (!availableSlots) {
+            return { media: [], message: `每条评价最多上传 ${REVIEW_MEDIA_MAX_FILES} 个图片/视频附件` };
+        }
+
+        for (const file of files.slice(0, availableSlots)) {
+            const mimeType = String(file?.type || '').trim().toLowerCase();
+            const kind = inferReviewMediaKind('', mimeType);
+
+            if (!kind) {
+                messages.push(`“${file.name}” 不是支持的图片或视频格式`);
+                continue;
+            }
+
+            const size = Number(file?.size || 0) || 0;
+            if (kind === 'image' && size > REVIEW_MEDIA_MAX_IMAGE_BYTES) {
+                messages.push(`图片“${file.name}”超过 ${formatFileSize(REVIEW_MEDIA_MAX_IMAGE_BYTES)}`);
+                continue;
+            }
+            if (kind === 'video' && size > REVIEW_MEDIA_MAX_VIDEO_BYTES) {
+                messages.push(`视频“${file.name}”超过 ${formatFileSize(REVIEW_MEDIA_MAX_VIDEO_BYTES)}`);
+                continue;
+            }
+            if ((totalBytes + size) > REVIEW_MEDIA_TOTAL_BYTES_LIMIT) {
+                messages.push(`附件总大小不能超过 ${formatFileSize(REVIEW_MEDIA_TOTAL_BYTES_LIMIT)}`);
+                continue;
+            }
+
+            try {
+                const dataUrl = await readFileAsDataUrl(file);
+                const src = sanitizeReviewMediaUrl(dataUrl);
+                if (!src) {
+                    messages.push(`“${file.name}” 读取后格式无效`);
+                    continue;
+                }
+
+                nextItems.push({
+                    id: createClientSideId('review-media'),
+                    kind,
+                    mimeType,
+                    name: String(file.name || `${kind}-${nextItems.length + 1}`),
+                    size,
+                    src
+                });
+                totalBytes += size;
+            } catch {
+                messages.push(`“${file.name}” 读取失败，请重试`);
+            }
+        }
+
+        if (files.length > availableSlots) {
+            messages.push(`超出数量限制，最多只能再添加 ${availableSlots} 个附件`);
+        }
+
+        return {
+            media: nextItems,
+            message: messages.slice(0, 3).join('；')
+        };
+    }
+
+    function renderReviewMediaItemsHtml(mediaList, options = {}) {
+        const items = normalizeReviewMediaList(mediaList);
+        const removable = Boolean(options.removable);
+        const emptyText = options.emptyText || '暂未添加图片或视频';
+
+        if (!items.length) {
+            return `<div class="review-media-empty">${escapeHtml(emptyText)}</div>`;
+        }
+
+        return items.map(item => {
+            const src = sanitizeReviewMediaUrl(item?.src);
+            if (!src) return '';
+            const safeSrc = escapeHtml(src);
+            const safeName = escapeHtml(item?.name || (item?.kind === 'video' ? '视频附件' : '图片附件'));
+            const metaText = item?.size ? `${safeName} · ${escapeHtml(formatFileSize(item.size))}` : safeName;
+            return `
+                <div class="review-media-item" data-media-id="${escapeHtml(String(item?.id || ''))}">
+                    <div class="review-media-preview ${item.kind === 'video' ? 'video' : 'image'}">
+                        ${item.kind === 'video'
+                            ? `<video controls preload="metadata" src="${safeSrc}"></video>`
+                            : `<img src="${safeSrc}" alt="${safeName}">`}
+                    </div>
+                    <div class="review-media-meta">${metaText}</div>
+                    ${removable ? `<button type="button" class="review-media-remove" data-media-id="${escapeHtml(String(item?.id || ''))}"><i class="fas fa-times"></i> 移除</button>` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+
+    function renderReviewMediaGalleryItemsHtml(mediaList, reviewId) {
+        const items = normalizeReviewMediaList(mediaList);
+        if (!items.length) return '';
+
+        return items.map((item, index) => {
+            const src = sanitizeReviewMediaUrl(item?.src);
+            if (!src) return '';
+            const safeSrc = escapeHtml(src);
+            const safeName = escapeHtml(item?.name || (item?.kind === 'video' ? '视频附件' : '图片附件'));
+            return `
+                <button type="button" class="review-media-item review-media-trigger" data-review-id="${escapeHtml(String(reviewId || ''))}" data-media-index="${index}" aria-label="查看${safeName}">
+                    <div class="review-media-preview ${item.kind === 'video' ? 'video' : 'image'}">
+                        ${item.kind === 'video'
+                            ? `<video preload="metadata" muted playsinline src="${safeSrc}"></video><span class="review-media-play-badge"><i class="fas fa-play"></i></span>`
+                            : `<img src="${safeSrc}" alt="${safeName}">`}
+                    </div>
+                    <div class="review-media-meta">${safeName}</div>
+                </button>
+            `;
+        }).join('');
+    }
+
+    function renderOrderReviewMediaDraft(card) {
+        if (!card) return;
+        const orderId = String(card.dataset.orderId || '').trim();
+        const bookId = Number(card.dataset.bookId);
+        if (!orderId || !Number.isFinite(bookId)) return;
+
+        const mediaList = getOrderReviewMediaDraft(orderId, bookId);
+        const grid = card.querySelector('.order-review-media-grid');
+        const status = card.querySelector('.order-review-media-status');
+        const clearButton = card.querySelector('.btn-clear-review-media');
+        if (grid) {
+            grid.innerHTML = renderReviewMediaItemsHtml(mediaList, { removable: !card.classList.contains('disabled'), emptyText: '尚未添加评价图片或视频' });
+        }
+        if (status) {
+            const totalBytes = getReviewMediaTotalBytes(mediaList);
+            status.textContent = mediaList.length
+                ? `已添加 ${mediaList.length}/${REVIEW_MEDIA_MAX_FILES} 个附件 · ${formatFileSize(totalBytes)}`
+                : `支持图片/视频上传，最多 ${REVIEW_MEDIA_MAX_FILES} 个附件`;
+        }
+        if (clearButton) {
+            clearButton.disabled = !mediaList.length || card.classList.contains('disabled');
+        }
+
+        grid?.querySelectorAll('.review-media-remove').forEach(button => {
+            button.addEventListener('click', function() {
+                const mediaId = String(this.dataset.mediaId || '').trim();
+                const nextMedia = mediaList.filter(item => String(item?.id || '').trim() !== mediaId);
+                setOrderReviewMediaDraft(orderId, bookId, nextMedia);
+                renderOrderReviewMediaDraft(card);
+            });
+        });
+    }
+
+    async function appendFilesToOrderReviewDraft(card, fileList) {
+        if (!card || card.classList.contains('disabled')) return;
+        const orderId = String(card.dataset.orderId || '').trim();
+        const bookId = Number(card.dataset.bookId);
+        if (!orderId || !Number.isFinite(bookId)) return;
+
+        const currentMedia = getOrderReviewMediaDraft(orderId, bookId);
+        const { media, message } = await convertFilesToReviewMedia(fileList, currentMedia);
+
+        if (media.length) {
+            setOrderReviewMediaDraft(orderId, bookId, [...currentMedia, ...media]);
+            renderOrderReviewMediaDraft(card);
+        }
+
+        if (message) {
+            showNotification(message, media.length ? 'info' : 'info');
+        }
+    }
+
+    function normalizeReviewHelpfulnessVote(raw, index = 0) {
+        const reviewId = String(raw?.review_id ?? raw?.reviewId ?? raw?.book_review_id ?? '').trim();
+        const userId = String(raw?.user_id ?? raw?.userId ?? '').trim();
+        return {
+            id: raw?.id ?? `review-vote-${index}`,
+            reviewId,
+            userId,
+            isHelpful: toNullableBoolean(raw?.is_helpful ?? raw?.isHelpful ?? raw?.vote ?? raw?.helpful),
+            createdAt: raw?.created_at ?? raw?.createdAt ?? '',
+            updatedAt: raw?.updated_at ?? raw?.updatedAt ?? raw?.created_at ?? raw?.createdAt ?? ''
+        };
+    }
+
+    function rebuildReviewHelpfulnessCaches() {
+        clearReviewHelpfulnessCaches();
+        const currentUserKey = String(currentUserId || '').trim();
+
+        (Array.isArray(reviewHelpfulnessVotes) ? reviewHelpfulnessVotes : []).forEach(vote => {
+            const reviewId = String(vote?.reviewId || '').trim();
+            const userId = String(vote?.userId || '').trim();
+            const isHelpful = toNullableBoolean(vote?.isHelpful);
+            if (!reviewId || !userId || isHelpful === null) return;
+
+            const bucket = reviewHelpfulnessStatsMap.get(reviewId) || { helpfulCount: 0, notHelpfulCount: 0 };
+            if (isHelpful) {
+                bucket.helpfulCount += 1;
+            } else {
+                bucket.notHelpfulCount += 1;
+            }
+            reviewHelpfulnessStatsMap.set(reviewId, bucket);
+
+            if (currentUserKey && userId === currentUserKey) {
+                currentUserReviewVoteMap.set(reviewId, isHelpful);
+            }
+        });
+    }
+
+    function getReviewHelpfulnessStats(reviewId) {
+        const key = String(reviewId || '').trim();
+        const stats = reviewHelpfulnessStatsMap.get(key) || { helpfulCount: 0, notHelpfulCount: 0 };
+        return {
+            helpfulCount: Number(stats.helpfulCount || 0),
+            notHelpfulCount: Number(stats.notHelpfulCount || 0),
+            currentUserVote: currentUserReviewVoteMap.has(key) ? currentUserReviewVoteMap.get(key) : null
+        };
+    }
+
+    function isOwnReview(review) {
+        const reviewUserId = String(review?.userId || '').trim();
+        const userKey = String(currentUserId || '').trim();
+        return Boolean(reviewUserId && userKey && reviewUserId === userKey);
+    }
+
+    function canVoteReviewHelpfulness(review) {
+        if (!review?.id) return false;
+        if (isGuestUser()) return false;
+        if (!String(currentUserId || '').trim()) return false;
+        return !isOwnReview(review);
     }
 
     async function loadBookReviewsFromSupabase() {
@@ -215,6 +602,29 @@ document.addEventListener('DOMContentLoaded', async function() {
             rebuildReviewCaches();
         } catch (e) {
             console.warn('Unexpected load book reviews error:', e);
+        }
+    }
+
+    async function loadReviewHelpfulnessVotesFromSupabase() {
+        reviewHelpfulnessVotes = [];
+        clearReviewHelpfulnessCaches();
+        if (!supabaseClient) return;
+
+        try {
+            const { data, error } = await supabaseClient.from('review_helpfulness_votes').select('*');
+            if (error) {
+                console.warn('Load review helpfulness votes failed:', error);
+                return;
+            }
+
+            reviewHelpfulnessVotes = Array.isArray(data)
+                ? data
+                    .map((row, index) => normalizeReviewHelpfulnessVote(row, index))
+                    .filter(row => row.reviewId && row.userId && row.isHelpful !== null)
+                : [];
+            rebuildReviewHelpfulnessCaches();
+        } catch (e) {
+            console.warn('Unexpected load review helpfulness votes error:', e);
         }
     }
 
@@ -254,6 +664,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             book_id: bookId,
             rating,
             comment: String(reviewPayload?.comment || '').trim() || null,
+            review_media: normalizeReviewMediaList(reviewPayload?.media),
             reviewer_name: String(reviewPayload?.reviewerName || '').trim() || null,
             updated_at: new Date().toISOString()
         };
@@ -302,6 +713,74 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         if (finalMessage.includes('relation') || finalMessage.includes('does not exist')) {
             return { ok: false, message: 'book_reviews 表不存在，请先执行建表 SQL' };
+        }
+        return { ok: false, message: finalMessage };
+    }
+
+    async function saveReviewHelpfulnessVoteToCloud(reviewId, isHelpful) {
+        if (!supabaseClient) return { ok: false, message: '未连接到数据库' };
+
+        const normalizedReviewId = String(reviewId || '').trim();
+        if (!normalizedReviewId) return { ok: false, message: '评价信息缺失，无法提交反馈' };
+
+        const userId = String(currentUserId || '').trim();
+        if (!userId) return { ok: false, message: '请先登录后再标记评价是否有帮助' };
+
+        const review = (Array.isArray(bookReviews) ? bookReviews : []).find(item => String(item?.id || '').trim() === normalizedReviewId);
+        if (!review) return { ok: false, message: '未找到对应评价，页面数据可能已过期' };
+        if (isOwnReview(review)) return { ok: false, message: '不能为自己发布的评价投票' };
+
+        const helpfulFlag = toNullableBoolean(isHelpful);
+        if (helpfulFlag === null) return { ok: false, message: '反馈类型无效' };
+
+        const payload = {
+            review_id: normalizedReviewId,
+            user_id: userId,
+            is_helpful: helpfulFlag,
+            updated_at: new Date().toISOString()
+        };
+
+        const conflictCandidates = ['review_id,user_id', 'user_id,review_id'];
+        for (const conflict of conflictCandidates) {
+            const { error } = await supabaseClient
+                .from('review_helpfulness_votes')
+                .upsert([{ ...payload, created_at: new Date().toISOString() }], { onConflict: conflict });
+
+            if (!error) return { ok: true };
+
+            const msg = String(error?.message || error?.details || error?.hint || '');
+            const isConflictMissing = msg.includes('constraint') || msg.includes('on conflict') || msg.includes('unique') || msg.includes('there is no unique');
+            if (!isConflictMissing) {
+                if (msg.toLowerCase().includes('row-level security') || msg.toLowerCase().includes('permission denied')) {
+                    return { ok: false, message: 'review_helpfulness_votes 表权限策略未放行，请检查 Supabase RLS' };
+                }
+                if (msg.includes('relation') || msg.includes('does not exist')) {
+                    return { ok: false, message: 'review_helpfulness_votes 表不存在，请先执行建表 SQL' };
+                }
+                return { ok: false, message: msg || '未知错误' };
+            }
+        }
+
+        const { error: updateError } = await supabaseClient
+            .from('review_helpfulness_votes')
+            .update(payload)
+            .eq('review_id', payload.review_id)
+            .eq('user_id', payload.user_id);
+
+        if (!updateError) return { ok: true };
+
+        const { error: insertError } = await supabaseClient
+            .from('review_helpfulness_votes')
+            .insert([{ ...payload, created_at: new Date().toISOString() }]);
+
+        if (!insertError) return { ok: true };
+
+        const finalMessage = String(insertError?.message || insertError?.details || insertError?.hint || '未知错误');
+        if (finalMessage.toLowerCase().includes('row-level security') || finalMessage.toLowerCase().includes('permission denied')) {
+            return { ok: false, message: 'review_helpfulness_votes 表权限策略未放行，请检查 Supabase RLS' };
+        }
+        if (finalMessage.includes('relation') || finalMessage.includes('does not exist')) {
+            return { ok: false, message: 'review_helpfulness_votes 表不存在，请先执行建表 SQL' };
         }
         return { ok: false, message: finalMessage };
     }
@@ -806,6 +1285,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         await loadFavoritesFromSupabase();
         await loadUserOrdersFromSupabase();
         await loadBookReviewsFromSupabase();
+        await loadReviewHelpfulnessVotesFromSupabase();
         browsingHistory = loadHistoryFromStorage();
         syncCartWithVisibleBooks();
         syncHistoryWithVisibleBooks();
@@ -1518,7 +1998,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const modal = document.getElementById('order-detail-modal');
         if (!modal) return;
         modal.classList.remove('active');
-        document.body.classList.remove('detail-open');
+        syncDetailOpenState();
     }
 
     function findExistingOrderBookReview(orderId, bookId) {
@@ -1541,6 +2021,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const review = Number.isFinite(bookId) ? findExistingOrderBookReview(order.id, bookId) : null;
         const initialRating = clampRating(review?.rating || 0);
         const initialComment = String(review?.comment || '').trim();
+        const initialMedia = normalizeReviewMediaList(review?.media);
         const canReviewOrder = normalizeOrderStatus(order?.status) === 'received';
 
         if (!Number.isFinite(bookId)) {
@@ -1558,12 +2039,27 @@ document.addEventListener('DOMContentLoaded', async function() {
             <div class="order-review-card ${canReviewOrder ? '' : 'disabled'}" data-order-id="${escapeHtml(order.id)}" data-book-id="${bookId}">
                 <div class="order-review-header">
                     <strong>${escapeHtml(item?.title || '图书')}</strong>
-                    <span class="order-review-hint">${canReviewOrder ? (review ? '已评价，可修改' : '请为该图书评分（可选评论）') : '订单未收货，暂不可评价'}</span>
+                    <span class="order-review-hint">${canReviewOrder ? (review ? '已评价，可修改，可补充图片/视频' : '请为该图书评分，可选文字和图片/视频') : '订单未收货，暂不可评价'}</span>
                 </div>
                 <div class="order-review-stars" data-rating="${initialRating}">
                     ${[1, 2, 3, 4, 5].map(score => `<button type="button" class="order-review-star ${score <= initialRating ? 'active' : ''}" data-score="${score}" ${canReviewOrder ? '' : 'disabled'}><i class="fas fa-star"></i></button>`).join('')}
                 </div>
                 <textarea class="order-review-comment" rows="3" maxlength="300" placeholder="可选：写下你的评价（最多 300 字）" ${canReviewOrder ? '' : 'disabled'}>${escapeHtml(initialComment)}</textarea>
+                <div class="order-review-media-block">
+                    <div class="order-review-media-toolbar">
+                        <button type="button" class="btn btn-outline btn-pick-review-media" ${canReviewOrder ? '' : 'disabled'}><i class="fas fa-photo-film"></i> 选择图片/视频</button>
+                        <button type="button" class="btn btn-outline btn-clear-review-media" ${canReviewOrder && initialMedia.length ? '' : 'disabled'}><i class="fas fa-trash"></i> 清空附件</button>
+                        <span class="order-review-media-status">${initialMedia.length ? `已添加 ${initialMedia.length}/${REVIEW_MEDIA_MAX_FILES} 个附件` : `支持图片/视频上传，最多 ${REVIEW_MEDIA_MAX_FILES} 个附件`}</span>
+                    </div>
+                    <input class="order-review-media-input" type="file" accept="image/*,video/*" multiple ${canReviewOrder ? '' : 'disabled'} hidden>
+                    <div class="order-review-dropzone ${canReviewOrder ? '' : 'disabled'}" tabindex="0">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <strong>拖拽图片或视频到这里</strong>
+                        <span>也可点击上方按钮直接选择，无需单独上传到存储桶</span>
+                        <small>单张图片不超过 ${formatFileSize(REVIEW_MEDIA_MAX_IMAGE_BYTES)}，单个视频不超过 ${formatFileSize(REVIEW_MEDIA_MAX_VIDEO_BYTES)}</small>
+                    </div>
+                    <div class="order-review-media-grid">${renderReviewMediaItemsHtml(initialMedia, { removable: canReviewOrder, emptyText: '尚未添加评价图片或视频' })}</div>
+                </div>
                 <div class="order-review-actions">
                     <button type="button" class="btn btn-primary btn-submit-order-review" ${canReviewOrder ? '' : 'disabled'}>提交评价</button>
                     <span class="order-review-status">${review ? `当前评分：${initialRating} 分` : '尚未提交评价'}</span>
@@ -1574,6 +2070,76 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     function bindOrderReviewInteractions(container) {
         if (!container) return;
+
+        container.querySelectorAll('.order-review-card').forEach(card => {
+            const orderId = String(card.dataset.orderId || '').trim();
+            const bookId = Number(card.dataset.bookId);
+            if (!orderId || !Number.isFinite(bookId)) return;
+
+            const review = findExistingOrderBookReview(orderId, bookId);
+            setOrderReviewMediaDraft(orderId, bookId, review?.media || []);
+            renderOrderReviewMediaDraft(card);
+
+            const pickButton = card.querySelector('.btn-pick-review-media');
+            const clearButton = card.querySelector('.btn-clear-review-media');
+            const input = card.querySelector('.order-review-media-input');
+            const dropzone = card.querySelector('.order-review-dropzone');
+
+            pickButton?.addEventListener('click', function() {
+                if (this.disabled) return;
+                input?.click();
+            });
+
+            clearButton?.addEventListener('click', function() {
+                if (this.disabled) return;
+                setOrderReviewMediaDraft(orderId, bookId, []);
+                renderOrderReviewMediaDraft(card);
+                this.disabled = true;
+            });
+
+            input?.addEventListener('change', async function() {
+                await appendFilesToOrderReviewDraft(card, this.files);
+                this.value = '';
+                const nextMedia = getOrderReviewMediaDraft(orderId, bookId);
+                if (clearButton) clearButton.disabled = !nextMedia.length;
+            });
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropzone?.addEventListener(eventName, function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (card.classList.contains('disabled')) return;
+                    this.classList.add('dragover');
+                });
+            });
+
+            ['dragleave', 'dragend', 'drop'].forEach(eventName => {
+                dropzone?.addEventListener(eventName, function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.classList.remove('dragover');
+                });
+            });
+
+            dropzone?.addEventListener('drop', async function(e) {
+                if (card.classList.contains('disabled')) return;
+                await appendFilesToOrderReviewDraft(card, e.dataTransfer?.files);
+                const nextMedia = getOrderReviewMediaDraft(orderId, bookId);
+                if (clearButton) clearButton.disabled = !nextMedia.length;
+            });
+
+            dropzone?.addEventListener('click', function() {
+                if (card.classList.contains('disabled')) return;
+                input?.click();
+            });
+
+            dropzone?.addEventListener('keydown', function(e) {
+                if (card.classList.contains('disabled')) return;
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                input?.click();
+            });
+        });
 
         container.querySelectorAll('.order-review-stars').forEach(starWrap => {
             const syncStars = (rating) => {
@@ -1603,6 +2169,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 const starWrap = card.querySelector('.order-review-stars');
                 const rating = clampRating(starWrap?.dataset.rating);
                 const comment = String(card.querySelector('.order-review-comment')?.value || '').trim();
+                const media = getOrderReviewMediaDraft(orderId, bookId);
 
                 if (!rating) {
                     showNotification('请先选择 1-5 分评分', 'info');
@@ -1622,6 +2189,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     bookId,
                     rating,
                     comment,
+                    media,
                     reviewerName
                 });
                 this.disabled = false;
@@ -1710,7 +2278,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         bindOrderReviewInteractions(body);
 
         modal.classList.add('active');
-        document.body.classList.add('detail-open');
+        syncDetailOpenState();
 
         if (options.focusReview) {
             const reviewSection = body.querySelector('[data-section="order-reviews"]');
@@ -2716,6 +3284,153 @@ if (checkoutBtn) {
         return modal;
     }
 
+    function ensureReviewMediaGalleryModal() {
+        let modal = document.getElementById('review-media-gallery-modal');
+        if (modal) return modal;
+
+        modal = document.createElement('div');
+        modal.id = 'review-media-gallery-modal';
+        modal.className = 'review-media-gallery-modal';
+        modal.innerHTML = `
+            <div class="review-media-gallery-overlay" data-role="close-review-media-gallery"></div>
+            <div class="review-media-gallery-panel" role="dialog" aria-modal="true" aria-labelledby="review-media-gallery-title">
+                <button type="button" class="review-media-gallery-close" data-role="close-review-media-gallery" aria-label="关闭大图预览">
+                    <i class="fas fa-times"></i>
+                </button>
+                <div class="review-media-gallery-header">
+                    <strong id="review-media-gallery-title">评价附件预览</strong>
+                    <span class="review-media-gallery-counter">1 / 1</span>
+                </div>
+                <div class="review-media-gallery-stage-wrap">
+                    <button type="button" class="review-media-gallery-nav prev" aria-label="上一张"><i class="fas fa-chevron-left"></i></button>
+                    <div class="review-media-gallery-stage"></div>
+                    <button type="button" class="review-media-gallery-nav next" aria-label="下一张"><i class="fas fa-chevron-right"></i></button>
+                </div>
+                <div class="review-media-gallery-thumbs"></div>
+            </div>
+        `;
+
+        modal.addEventListener('click', function(e) {
+            if (e.target.closest('[data-role="close-review-media-gallery"]')) {
+                closeReviewMediaGallery();
+            }
+        });
+
+        const prevButton = modal.querySelector('.review-media-gallery-nav.prev');
+        const nextButton = modal.querySelector('.review-media-gallery-nav.next');
+        prevButton?.addEventListener('click', () => modal._setIndex?.((Number(modal._currentIndex || 0) - 1)));
+        nextButton?.addEventListener('click', () => modal._setIndex?.((Number(modal._currentIndex || 0) + 1)));
+
+        const stageWrap = modal.querySelector('.review-media-gallery-stage-wrap');
+        stageWrap?.addEventListener('touchstart', function(e) {
+            const touch = e.changedTouches?.[0];
+            modal._touchStartX = touch ? Number(touch.clientX) : null;
+        }, { passive: true });
+        stageWrap?.addEventListener('touchend', function(e) {
+            const touch = e.changedTouches?.[0];
+            const startX = Number(modal._touchStartX);
+            const endX = touch ? Number(touch.clientX) : startX;
+            if (!Number.isFinite(startX) || !Number.isFinite(endX)) return;
+            const delta = endX - startX;
+            if (Math.abs(delta) < 40) return;
+            if (delta < 0) {
+                modal._setIndex?.((Number(modal._currentIndex || 0) + 1));
+            } else {
+                modal._setIndex?.((Number(modal._currentIndex || 0) - 1));
+            }
+        }, { passive: true });
+
+        document.addEventListener('keydown', function(e) {
+            if (!modal.classList.contains('active')) return;
+            if (e.key === 'Escape') {
+                closeReviewMediaGallery();
+                return;
+            }
+            if (e.key === 'ArrowRight') {
+                modal._setIndex?.((Number(modal._currentIndex || 0) + 1));
+            }
+            if (e.key === 'ArrowLeft') {
+                modal._setIndex?.((Number(modal._currentIndex || 0) - 1));
+            }
+        });
+
+        document.body.appendChild(modal);
+        return modal;
+    }
+
+    function openReviewMediaGallery(mediaList, startIndex = 0) {
+        const items = normalizeReviewMediaList(mediaList);
+        if (!items.length) return;
+
+        const modal = ensureReviewMediaGalleryModal();
+        const stage = modal.querySelector('.review-media-gallery-stage');
+        const counter = modal.querySelector('.review-media-gallery-counter');
+        const thumbs = modal.querySelector('.review-media-gallery-thumbs');
+        const prevButton = modal.querySelector('.review-media-gallery-nav.prev');
+        const nextButton = modal.querySelector('.review-media-gallery-nav.next');
+        const title = modal.querySelector('#review-media-gallery-title');
+
+        modal._items = items;
+        modal._setIndex = nextIndex => {
+            const galleryItems = Array.isArray(modal._items) ? modal._items : [];
+            if (!galleryItems.length) return;
+
+            const normalizedIndex = (Number(nextIndex) + galleryItems.length) % galleryItems.length;
+            modal._currentIndex = normalizedIndex;
+            const currentItem = galleryItems[normalizedIndex];
+            const currentSrc = escapeHtml(sanitizeReviewMediaUrl(currentItem?.src));
+            const currentName = escapeHtml(currentItem?.name || (currentItem?.kind === 'video' ? '视频附件' : '图片附件'));
+
+            if (stage) {
+                stage.innerHTML = currentItem?.kind === 'video'
+                    ? `<video controls autoplay playsinline src="${currentSrc}"></video>`
+                    : `<img src="${currentSrc}" alt="${currentName}">`;
+            }
+
+            if (title) {
+                title.textContent = currentItem?.kind === 'video' ? '评价视频预览' : '评价图片预览';
+            }
+
+            if (counter) {
+                counter.textContent = `${normalizedIndex + 1} / ${galleryItems.length}`;
+            }
+
+            if (thumbs) {
+                thumbs.innerHTML = galleryItems.map((item, index) => {
+                    const src = escapeHtml(sanitizeReviewMediaUrl(item?.src));
+                    const label = escapeHtml(item?.name || (item?.kind === 'video' ? '视频附件' : '图片附件'));
+                    return `
+                        <button type="button" class="review-media-gallery-thumb ${index === normalizedIndex ? 'active' : ''}" data-index="${index}" aria-label="查看${label}">
+                            ${item?.kind === 'video'
+                                ? `<video muted playsinline preload="metadata" src="${src}"></video><span class="review-media-play-badge small"><i class="fas fa-play"></i></span>`
+                                : `<img src="${src}" alt="${label}">`}
+                        </button>
+                    `;
+                }).join('');
+
+                thumbs.querySelectorAll('.review-media-gallery-thumb').forEach(button => {
+                    button.addEventListener('click', function() {
+                        modal._setIndex?.(Number(this.dataset.index || 0));
+                    });
+                });
+            }
+
+            if (prevButton) prevButton.disabled = galleryItems.length <= 1;
+            if (nextButton) nextButton.disabled = galleryItems.length <= 1;
+        };
+
+        modal.classList.add('active');
+        syncDetailOpenState();
+        modal._setIndex(startIndex);
+    }
+
+    function closeReviewMediaGallery() {
+        const modal = document.getElementById('review-media-gallery-modal');
+        if (!modal) return;
+        modal.classList.remove('active');
+        syncDetailOpenState();
+    }
+
     function getBookMetaRows(book) {
         const ratingStats = bookRatingStatsMap.get(String(book?.id));
         const rows = [
@@ -2746,6 +3461,12 @@ if (checkoutBtn) {
             .slice(0, limit);
     }
 
+    function getBookReviewHelpfulnessHint(review) {
+        if (isOwnReview(review)) return '这是你发布的评价，不能给自己投票';
+        if (isGuestUser() || !String(currentUserId || '').trim()) return '登录后可标记这条评价是否有帮助';
+        return '这条评价对你有帮助吗？';
+    }
+
     function renderBookReviewsSection(book) {
         const reviews = getBookReviewsForDisplay(book?.id, 12);
         if (!reviews.length) {
@@ -2759,6 +3480,10 @@ if (checkoutBtn) {
                     const createdText = review?.createdAt ? formatOrderDate(review.createdAt) : '时间未知';
                     const reviewerName = String(review?.reviewerName || '匿名用户').trim();
                     const comment = String(review?.comment || '').trim();
+                    const media = normalizeReviewMediaList(review?.media);
+                    const stats = getReviewHelpfulnessStats(review?.id);
+                    const canVote = canVoteReviewHelpfulness(review);
+                    const reviewId = escapeHtml(String(review?.id || ''));
                     return `
                         <div class="book-review-item">
                             <div class="book-review-header">
@@ -2767,11 +3492,82 @@ if (checkoutBtn) {
                             </div>
                             <div class="book-review-rating">${[1, 2, 3, 4, 5].map(score => `<i class="fas fa-star ${score <= rating ? 'active' : ''}"></i>`).join('')}<span>${rating}.0 分</span></div>
                             <p class="book-review-comment">${comment ? escapeHtml(comment) : '该用户仅评分，未填写评论。'}</p>
+                            ${media.length ? `<div class="book-review-media-grid">${renderReviewMediaGalleryItemsHtml(media, review?.id)}</div>` : ''}
+                            <div class="book-review-helpfulness">
+                                <span class="book-review-helpfulness-label">${escapeHtml(getBookReviewHelpfulnessHint(review))}</span>
+                                <div class="book-review-helpfulness-actions">
+                                    <button type="button" class="review-helpfulness-btn helpful ${stats.currentUserVote === true ? 'active' : ''}" data-review-id="${reviewId}" data-helpful="true" ${canVote ? '' : 'disabled'}>
+                                        <i class="fas fa-thumbs-up"></i>
+                                        <span>有帮助</span>
+                                        <strong>${stats.helpfulCount}</strong>
+                                    </button>
+                                    <button type="button" class="review-helpfulness-btn not-helpful ${stats.currentUserVote === false ? 'active' : ''}" data-review-id="${reviewId}" data-helpful="false" ${canVote ? '' : 'disabled'}>
+                                        <i class="fas fa-thumbs-down"></i>
+                                        <span>没帮助</span>
+                                        <strong>${stats.notHelpfulCount}</strong>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     `;
                 }).join('')}
             </div>
         `;
+    }
+
+    function renderBookReviewContent(container, book) {
+        if (!container) return;
+        container.innerHTML = renderBookReviewsSection(book);
+        bindBookReviewHelpfulnessInteractions(container, book);
+        bindBookReviewMediaInteractions(container, book);
+    }
+
+    function bindBookReviewMediaInteractions(container, book) {
+        if (!container) return;
+
+        container.querySelectorAll('.review-media-trigger').forEach(button => {
+            button.addEventListener('click', function() {
+                const reviewId = String(this.dataset.reviewId || '').trim();
+                const mediaIndex = Number(this.dataset.mediaIndex || 0);
+                const review = getBookReviewsForDisplay(book?.id, 100).find(item => String(item?.id || '').trim() === reviewId);
+                const mediaList = normalizeReviewMediaList(review?.media);
+                if (!mediaList.length) return;
+                openReviewMediaGallery(mediaList, mediaIndex);
+            });
+        });
+    }
+
+    function bindBookReviewHelpfulnessInteractions(container, book) {
+        if (!container) return;
+
+        container.querySelectorAll('.review-helpfulness-btn').forEach(button => {
+            button.addEventListener('click', async function() {
+                const reviewId = String(this.dataset.reviewId || '').trim();
+                const helpfulFlag = this.dataset.helpful === 'true';
+                const currentVote = getReviewHelpfulnessStats(reviewId).currentUserVote;
+
+                if (currentVote === helpfulFlag) {
+                    showNotification('你已经提交过这个反馈了', 'info');
+                    return;
+                }
+
+                const actionWrap = this.closest('.book-review-helpfulness');
+                actionWrap?.querySelectorAll('.review-helpfulness-btn').forEach(item => {
+                    item.disabled = true;
+                });
+
+                const result = await saveReviewHelpfulnessVoteToCloud(reviewId, helpfulFlag);
+                if (!result.ok) {
+                    renderBookReviewContent(container, book);
+                    showNotification(`反馈提交失败：${result.message}`, 'info');
+                    return;
+                }
+
+                await loadReviewHelpfulnessVotesFromSupabase();
+                renderBookReviewContent(container, book);
+                showNotification('已记录这条评价的帮助反馈', 'success');
+            });
+        });
     }
 
     function openBookDetail(bookId) {
@@ -2859,9 +3655,11 @@ if (checkoutBtn) {
             </div>` : ''}
             <div class="book-detail-section" data-section="book-reviews">
                 <h3>用户评价</h3>
-                ${renderBookReviewsSection(book)}
+                <div data-role="book-review-content"></div>
             </div>
         `;
+
+        renderBookReviewContent(body.querySelector('[data-role="book-review-content"]'), book);
 
         body.querySelector('.detail-add-cart')?.addEventListener('click', function() {
             if (isGuestUser()) {
@@ -2933,7 +3731,7 @@ if (checkoutBtn) {
         }
 
         modal.classList.add('active');
-        document.body.classList.add('detail-open');
+        syncDetailOpenState();
     }
 
     function closeBookDetail() {
@@ -2941,7 +3739,7 @@ if (checkoutBtn) {
         if (!modal) return;
         stopDetailGalleryAutoplay();
         modal.classList.remove('active');
-        document.body.classList.remove('detail-open');
+        syncDetailOpenState();
     }
 
     function bindBookDetailTriggers(scope) {
@@ -3380,6 +4178,369 @@ if (checkoutBtn) {
             margin: 0;
         }
 
+        .order-review-media-block {
+            display: grid;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .order-review-media-toolbar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .order-review-media-status {
+            color: #6b7280;
+            font-size: 12px;
+        }
+
+        .order-review-dropzone {
+            border: 1.5px dashed rgba(140, 90, 48, 0.35);
+            border-radius: 14px;
+            padding: 18px 16px;
+            background: rgba(140, 90, 48, 0.04);
+            color: #6b7280;
+            display: grid;
+            gap: 6px;
+            justify-items: center;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .order-review-dropzone i {
+            font-size: 24px;
+            color: #8c5a30;
+        }
+
+        .order-review-dropzone.dragover {
+            border-color: #8c5a30;
+            background: rgba(140, 90, 48, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .order-review-dropzone.disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            background: #f8fafc;
+        }
+
+        .order-review-media-grid,
+        .book-review-media-grid {
+            display: grid;
+            gap: 12px;
+        }
+
+        .order-review-media-grid {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+
+        .book-review-media-grid {
+            grid-template-columns: repeat(auto-fit, minmax(88px, 88px));
+            gap: 8px;
+            justify-content: flex-start;
+        }
+
+        .review-media-item {
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 14px;
+            padding: 10px;
+            background: #fff;
+            display: grid;
+            gap: 8px;
+        }
+
+        .review-media-trigger {
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            cursor: zoom-in;
+            width: 100%;
+            text-align: left;
+            font: inherit;
+        }
+
+        .review-media-preview {
+            border-radius: 12px;
+            overflow: hidden;
+            background: #f3f4f6;
+            aspect-ratio: 4 / 3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .review-media-preview img,
+        .review-media-preview video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            background: #111827;
+        }
+
+        .review-media-play-badge {
+            position: absolute;
+            inset: auto auto 8px 8px;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(17, 24, 39, 0.75);
+            color: #fff;
+            pointer-events: none;
+        }
+
+        .review-media-play-badge.small {
+            width: 22px;
+            height: 22px;
+            inset: auto auto 6px 6px;
+            font-size: 11px;
+        }
+
+        .review-media-preview.video {
+            position: relative;
+        }
+
+        .book-review-media-grid .review-media-item {
+            padding: 4px;
+            gap: 4px;
+            border-radius: 10px;
+        }
+
+        .book-review-media-grid .review-media-preview {
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+        }
+
+        .book-review-media-grid .review-media-meta {
+            display: none;
+        }
+
+        .review-media-gallery-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 3600;
+            display: none;
+        }
+
+        .review-media-gallery-modal.active {
+            display: block;
+        }
+
+        .review-media-gallery-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.84);
+            backdrop-filter: blur(3px);
+        }
+
+        .review-media-gallery-panel {
+            position: absolute;
+            inset: 24px;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            gap: 14px;
+            padding: 20px;
+            border-radius: 24px;
+            background: rgba(15, 23, 42, 0.96);
+            color: #fff;
+            box-shadow: 0 24px 80px rgba(15, 23, 42, 0.32);
+        }
+
+        .review-media-gallery-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 42px;
+            height: 42px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .review-media-gallery-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding-right: 54px;
+        }
+
+        .review-media-gallery-counter {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 13px;
+        }
+
+        .review-media-gallery-stage-wrap {
+            position: relative;
+            display: grid;
+            align-items: center;
+            justify-items: center;
+            min-height: 0;
+        }
+
+        .review-media-gallery-stage {
+            width: 100%;
+            height: 100%;
+            min-height: 320px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .review-media-gallery-stage img,
+        .review-media-gallery-stage video {
+            max-width: 100%;
+            max-height: min(72vh, 820px);
+            width: auto;
+            height: auto;
+            border-radius: 18px;
+            object-fit: contain;
+            background: #000;
+        }
+
+        .review-media-gallery-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.14);
+            color: #fff;
+            cursor: pointer;
+            z-index: 1;
+        }
+
+        .review-media-gallery-nav.prev {
+            left: 12px;
+        }
+
+        .review-media-gallery-nav.next {
+            right: 12px;
+        }
+
+        .review-media-gallery-nav:disabled {
+            opacity: 0.35;
+            cursor: default;
+        }
+
+        .review-media-gallery-thumbs {
+            display: flex;
+            gap: 10px;
+            overflow-x: auto;
+            padding-bottom: 4px;
+        }
+
+        .review-media-gallery-thumb {
+            position: relative;
+            flex: 0 0 auto;
+            width: 72px;
+            height: 72px;
+            padding: 0;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid transparent;
+            background: rgba(255, 255, 255, 0.08);
+            cursor: pointer;
+        }
+
+        .review-media-gallery-thumb.active {
+            border-color: #f59e0b;
+        }
+
+        .review-media-gallery-thumb img,
+        .review-media-gallery-thumb video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            background: #000;
+        }
+
+        .review-media-meta {
+            font-size: 12px;
+            color: #6b7280;
+            word-break: break-word;
+        }
+
+        .review-media-remove {
+            border: none;
+            background: rgba(239, 68, 68, 0.08);
+            color: #b91c1c;
+            border-radius: 10px;
+            padding: 8px 10px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .review-media-empty {
+            border: 1px dashed rgba(15, 23, 42, 0.12);
+            border-radius: 12px;
+            padding: 16px;
+            color: #6b7280;
+            background: #fafafa;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .book-review-helpfulness {
+            margin-top: 12px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .book-review-helpfulness-label {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .book-review-helpfulness-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .review-helpfulness-btn {
+            border: 1px solid rgba(15, 23, 42, 0.12);
+            background: #fff;
+            color: #4b5563;
+            border-radius: 999px;
+            padding: 8px 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .review-helpfulness-btn strong {
+            color: #111827;
+            font-size: 13px;
+        }
+
+        .review-helpfulness-btn.active,
+        .review-helpfulness-btn:not(:disabled):hover {
+            border-color: rgba(140, 90, 48, 0.38);
+            background: rgba(140, 90, 48, 0.08);
+            color: #8c5a30;
+        }
+
+        .review-helpfulness-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.72;
+            background: #f8fafc;
+        }
+
         .order-review-actions {
             margin-top: 10px;
             display: flex;
@@ -3405,6 +4566,31 @@ if (checkoutBtn) {
                 width: calc(100% - 20px);
                 padding: 24px 18px;
                 max-height: calc(100vh - 20px);
+            }
+
+            .review-media-gallery-panel {
+                inset: 10px;
+                padding: 16px;
+                border-radius: 18px;
+            }
+
+            .review-media-gallery-stage {
+                min-height: 240px;
+            }
+
+            .review-media-gallery-stage img,
+            .review-media-gallery-stage video {
+                max-height: 60vh;
+            }
+
+            .review-media-gallery-nav {
+                width: 38px;
+                height: 38px;
+            }
+
+            .review-media-gallery-thumb {
+                width: 60px;
+                height: 60px;
             }
 
             .book-detail-hero,
