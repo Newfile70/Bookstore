@@ -3652,6 +3652,278 @@ if (checkoutBtn) {
         return `${base}; background-image: url('${coverUrl}'); background-size: cover; background-position: center;`;
     }
 
+    function getIntersectionCount(listA, listB) {
+        const source = Array.isArray(listA) ? listA : [];
+        const targetSet = new Set(Array.isArray(listB) ? listB : []);
+        const seen = new Set();
+        let count = 0;
+        source.forEach(item => {
+            if (!item || seen.has(item) || !targetSet.has(item)) return;
+            seen.add(item);
+            count += 1;
+        });
+        return count;
+    }
+
+    function getSharedItems(listA, listB, limit = 3) {
+        const source = Array.isArray(listA) ? listA : [];
+        const targetSet = new Set(Array.isArray(listB) ? listB : []);
+        const seen = new Set();
+        const shared = [];
+        source.forEach(item => {
+            if (!item || shared.length >= limit || seen.has(item) || !targetSet.has(item)) return;
+            seen.add(item);
+            shared.push(item);
+        });
+        return shared;
+    }
+
+    function calculatePriceClosenessScore(sourcePrice, candidatePrice) {
+        const left = Number(sourcePrice);
+        const right = Number(candidatePrice);
+        if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return 0;
+        const ratio = Math.abs(left - right) / Math.max(left, right, 1);
+        if (ratio <= 0.15) return 6;
+        if (ratio <= 0.3) return 3;
+        return 0;
+    }
+
+    function getBookSimilarityProfile(book) {
+        const normalizeLowerTrim = value => String(value || '').trim().toLowerCase();
+        const normalizedTags = normalizeTextList(book?.tags)
+            .map(item => normalizeLowerTrim(item))
+            .filter(Boolean);
+        return {
+            id: book?.id,
+            author: normalizeLowerTrim(book?.author),
+            category: normalizeLowerTrim(book?.category),
+            publisher: normalizeLowerTrim(book?.publisher),
+            price: Number(book?.price) || 0,
+            tags: Array.from(new Set(normalizedTags))
+        };
+    }
+
+    function buildRelatedReason(match, sourceBook, candidateBook) {
+        if (match?.sameAuthor) return '同作者作品';
+        if (Array.isArray(match?.sharedTags) && match.sharedTags.length) {
+            return `共同标签：${match.sharedTags.slice(0, 3).join('、')}`;
+        }
+        if (match?.sameCategory) {
+            return `同属“${getCategoryName(candidateBook?.category || sourceBook?.category)}”分类`;
+        }
+        if (match?.samePublisher) return '同出版社相关图书';
+        if (Number(match?.priceClosenessScore) > 0) return '价格区间接近，适合继续比较';
+        return '相关图书推荐';
+    }
+
+    function scoreRelatedBook(sourceBook, candidateBook) {
+        if (!sourceBook || !candidateBook) {
+            return { score: 0, reason: '', match: null };
+        }
+        if (String(sourceBook.id) === String(candidateBook.id)) {
+            return { score: 0, reason: '', match: null };
+        }
+        if (!isBookVisible(candidateBook)) {
+            return { score: 0, reason: '', match: null };
+        }
+
+        const sourceProfile = getBookSimilarityProfile(sourceBook);
+        const candidateProfile = getBookSimilarityProfile(candidateBook);
+
+        const sameAuthor = Boolean(sourceProfile.author) && sourceProfile.author === candidateProfile.author;
+        const sameCategory = Boolean(sourceProfile.category) && sourceProfile.category === candidateProfile.category;
+        const samePublisher = Boolean(sourceProfile.publisher) && sourceProfile.publisher === candidateProfile.publisher;
+        const sharedTagCount = getIntersectionCount(sourceProfile.tags, candidateProfile.tags);
+        const sharedTags = getSharedItems(sourceProfile.tags, candidateProfile.tags, 3);
+        const hasCoreRelation = (
+            sameAuthor
+            || sameCategory
+            || samePublisher
+            || sharedTagCount > 0
+        );
+
+        if (!hasCoreRelation) {
+            return { score: 0, reason: '', match: null };
+        }
+
+        const priceClosenessScore = calculatePriceClosenessScore(sourceProfile.price, candidateProfile.price);
+
+        let score = 0;
+        if (sameAuthor) score += 40;
+        if (sameCategory) score += 20;
+        if (samePublisher) score += 8;
+        score += Math.min(sharedTagCount, 3) * 8;
+        score += priceClosenessScore;
+
+        const match = {
+            sameAuthor,
+            sameCategory,
+            samePublisher,
+            sharedTags,
+            sharedTagCount,
+            hasCoreRelation,
+            priceClosenessScore
+        };
+
+        return {
+            score,
+            reason: buildRelatedReason(match, sourceBook, candidateBook),
+            match
+        };
+    }
+
+    function getRelatedBooks(sourceBook, limit = 4) {
+        const maxCount = Math.max(1, Number(limit) || 4);
+        if (!sourceBook) return [];
+
+        const sourceId = String(sourceBook.id);
+        const visibleBooks = getVisibleBooks(books);
+        const getSortRating = book => {
+            const aggregate = getBookAggregateRating(book?.id);
+            if (Number.isFinite(aggregate) && aggregate > 0) return aggregate;
+            const fallback = Number(book?.rating);
+            return Number.isFinite(fallback) ? fallback : 0;
+        };
+        const titleSort = (left, right) => String(left?.title || '').localeCompare(String(right?.title || ''), 'zh-Hans-CN');
+
+        const ranked = visibleBooks
+            .filter(candidate => String(candidate?.id) !== sourceId)
+            .map(candidate => {
+                const result = scoreRelatedBook(sourceBook, candidate);
+                return { book: candidate, ...result };
+            })
+            .filter(item => item.match && item.score > 0)
+            .sort((a, b) => (
+                b.score - a.score
+                || getSortRating(b.book) - getSortRating(a.book)
+                || titleSort(a.book, b.book)
+            ));
+
+        const selected = ranked.slice(0, maxCount);
+        if (selected.length >= maxCount) return selected;
+
+        const sourceCategory = String(sourceBook?.category || '').trim().toLowerCase();
+        if (!sourceCategory) return selected;
+
+        const pickedIds = new Set([sourceId, ...selected.map(item => String(item?.book?.id))]);
+        const fallback = visibleBooks
+            .filter(candidate => !pickedIds.has(String(candidate?.id)))
+            .filter(candidate => String(candidate?.category || '').trim().toLowerCase() === sourceCategory)
+            .sort((a, b) => (
+                getSortRating(b) - getSortRating(a)
+                || titleSort(a, b)
+            ));
+
+        fallback.forEach(candidate => {
+            if (selected.length >= maxCount) return;
+            const fallbackMatch = {
+                sameAuthor: false,
+                sameCategory: true,
+                samePublisher: false,
+                sharedTags: [],
+                sharedTagCount: 0,
+                priceClosenessScore: 0
+            };
+            selected.push({
+                book: candidate,
+                score: 20,
+                reason: buildRelatedReason(fallbackMatch, sourceBook, candidate),
+                match: fallbackMatch
+            });
+        });
+
+        return selected;
+    }
+
+    function renderRelatedBooksSection(sourceBook) {
+        const relatedBooks = getRelatedBooks(sourceBook, 4);
+        if (!relatedBooks.length) return '';
+
+        return `
+            <div class="book-detail-section related-books-section" data-section="related-books">
+                <div class="related-books-header">
+                    <h3>相关图书</h3>
+                    <p>基于作者、分类与标签为你推荐</p>
+                </div>
+                <div class="related-books-grid">
+                    ${relatedBooks.map(item => {
+                        const relatedBook = item.book;
+                        const coverUrl = getBookBrowseCoverUrl(relatedBook);
+                        return `
+                            <article class="related-book-card" data-book-id="${escapeHtml(relatedBook.id)}">
+                                <div class="related-book-cover" style="${getBookBrowseCoverStyle(relatedBook)}">
+                                    ${coverUrl ? '' : `<span>${escapeHtml((relatedBook.title || '图书').slice(0, 10))}</span>`}
+                                </div>
+                                <div class="related-book-body">
+                                    <div class="related-book-category">${escapeHtml(getCategoryName(relatedBook.category))}</div>
+                                    <h4 class="related-book-title">${escapeHtml(relatedBook.title || '未命名图书')}</h4>
+                                    <p class="related-book-author">${escapeHtml(relatedBook.author || '未知作者')}</p>
+                                    <p class="related-book-reason">${escapeHtml(item.reason || '图书属性相近，值得继续浏览')}</p>
+                                    <div class="related-book-footer">
+                                        <span class="related-book-price">¥ ${Number(relatedBook.price || 0).toFixed(2)}</span>
+                                        <div class="related-book-actions">
+                                            <button type="button" class="favorite-btn related-book-favorite ${isFavoriteBook(relatedBook.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(relatedBook.id)}" ${isGuestUser() ? 'disabled' : ''} aria-label="收藏图书">
+                                                <i class="${isFavoriteBook(relatedBook.id) ? 'fas' : 'far'} fa-heart"></i>
+                                            </button>
+                                            <button type="button" class="add-to-cart related-book-add-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(relatedBook.id)}" ${isGuestUser() ? 'disabled' : ''} aria-label="加入购物车">
+                                                <i class="fas fa-cart-plus"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </article>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    function bindRelatedBookInteractions(container) {
+        if (!container) return;
+
+        container.querySelectorAll('.related-book-card').forEach(card => {
+            if (card.dataset.relatedDetailBound === '1') return;
+            card.dataset.relatedDetailBound = '1';
+            card.addEventListener('click', function(e) {
+                if (e.target.closest('.related-book-favorite') || e.target.closest('.related-book-add-cart')) return;
+                const bookId = this.dataset.bookId;
+                if (!bookId) return;
+                openBookDetail(bookId);
+            });
+        });
+
+        container.querySelectorAll('.related-book-favorite').forEach(button => {
+            if (button.dataset.relatedFavBound === '1') return;
+            button.dataset.relatedFavBound = '1';
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isGuestUser()) {
+                    showNotification('游客无法收藏，请登录后操作', 'info');
+                    return;
+                }
+                toggleFavorite(this.dataset.id);
+            });
+        });
+
+        container.querySelectorAll('.related-book-add-cart').forEach(button => {
+            if (button.dataset.relatedCartBound === '1') return;
+            button.dataset.relatedCartBound = '1';
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isGuestUser()) {
+                    showNotification('游客无法使用购物车，请登录后操作', 'info');
+                    return;
+                }
+                const bookId = Number(this.dataset.id);
+                if (!Number.isFinite(bookId)) return;
+                addToCart(bookId);
+            });
+        });
+    }
+
     function getBookCoverStyle(book) {
         const base = `background-color: ${sanitizeColor(book?.color)}`;
         const coverUrl = getBookCoverUrl(book);
@@ -4184,6 +4456,7 @@ if (checkoutBtn) {
                 <h3>关键词</h3>
                 <div class="book-detail-tags">${tags.map(tag => `<span class="book-detail-tag">${escapeHtml(tag)}</span>`).join('')}</div>
             </div>` : ''}
+            ${renderRelatedBooksSection(book)}
             <div class="book-detail-section" data-section="book-reviews">
                 <h3>用户评价</h3>
                 <div data-role="book-review-content"></div>
@@ -4205,6 +4478,8 @@ if (checkoutBtn) {
             e.stopPropagation();
             toggleFavorite(this.dataset.id);
         });
+
+        bindRelatedBookInteractions(body);
 
         if (hasGallery) {
             const coverImage = body.querySelector('.book-detail-cover-image');
@@ -4543,6 +4818,127 @@ if (checkoutBtn) {
             background: rgba(140, 90, 48, 0.1);
             color: #8c5a30;
             font-size: 14px;
+        }
+
+        .related-books-header h3 {
+            margin-bottom: 8px;
+        }
+
+        .related-books-header p {
+            margin: 0;
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .related-books-grid {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 14px;
+        }
+
+        .related-book-card {
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 16px;
+            overflow: hidden;
+            background: #fff;
+            cursor: pointer;
+            display: grid;
+            grid-template-rows: 150px 1fr;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .related-book-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+        }
+
+        .related-book-cover {
+            background-size: cover;
+            background-position: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 600;
+            text-align: center;
+            padding: 10px;
+        }
+
+        .related-book-body {
+            padding: 12px;
+            display: grid;
+            gap: 8px;
+            align-content: start;
+        }
+
+        .related-book-category {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(140, 90, 48, 0.12);
+            color: #8c5a30;
+            font-size: 12px;
+        }
+
+        .related-book-title {
+            margin: 0;
+            font-size: 16px;
+            color: #111827;
+            line-height: 1.4;
+        }
+
+        .related-book-author {
+            margin: 0;
+            font-size: 13px;
+            color: #4b5563;
+        }
+
+        .related-book-reason {
+            margin: 0;
+            font-size: 12px;
+            color: #6b7280;
+            line-height: 1.5;
+            min-height: 36px;
+        }
+
+        .related-book-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .related-book-price {
+            color: #8c5a30;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        .related-book-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .related-book-favorite {
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .related-book-add-cart {
+            border: 1px solid rgba(140, 90, 48, 0.22);
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 12px;
+            background: rgba(140, 90, 48, 0.08);
+            color: #8c5a30;
         }
 
         .orders-filter-bar {
@@ -5240,6 +5636,29 @@ if (checkoutBtn) {
 
             .book-detail-title {
                 font-size: 26px;
+            }
+
+            .related-books-grid {
+                grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                gap: 12px;
+            }
+
+            .related-book-card {
+                grid-template-rows: 132px 1fr;
+            }
+
+            .related-book-footer {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .related-book-actions {
+                justify-content: space-between;
+            }
+
+            .related-book-add-cart {
+                flex: 1;
+                text-align: center;
             }
         }
     `;
