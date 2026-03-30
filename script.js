@@ -7,6 +7,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     const CART_STORAGE_PREFIX = 'bookstore_cart_v1';
     const HISTORY_STORAGE_PREFIX = 'bookstore_history_v1';
     const BOOKS_CACHE_KEY = 'bookstore_books_cache_v2';
+    const RECOMMENDATION_CACHE_PREFIX = 'bookstore_recommendation_cache_v1';
+    const RECOMMENDATION_SERVED_CACHE_PREFIX = 'bookstore_recommendation_served_v1';
+    const RECOMMENDATION_META_PREFIX = 'bookstore_recommendation_meta_v1';
+    const RECOMMENDATION_CACHE_TTL_MS = 10 * 60 * 1000;
+    const RECOMMENDATION_SERVED_TTL_MS = 10 * 60 * 1000;
+    const RECOMMENDATION_FALLBACK_TTL_MS = 90 * 1000;
+    const RECOMMENDATION_REFRESH_DEBOUNCE_MS = 2500;
+    const RECOMMENDATION_FALLBACK_LIMIT = 4;
+    const RECOMMENDATION_CANDIDATE_LIMIT = 18;
     const ORDER_AUTO_RECEIVE_MS = 7 * 24 * 60 * 60 * 1000;
     const ORDER_STATUS_LABELS = {
         pending: '待处理',
@@ -34,6 +43,25 @@ document.addEventListener('DOMContentLoaded', async function() {
     let currentUserId = null;
     let currentOrderFilter = 'all';
     let browsingHistory = [];
+    let recommendationRefreshTimer = null;
+    let recommendationRequestToken = 0;
+    let recommendationRefreshPromise = null;
+    let recommendationAbortController = null;
+    let recommendationMetaState = {
+        dirty: false,
+        dirtyReasons: [],
+        dirtyHintShown: false,
+        lastSuccessfulRefreshAt: '',
+        lastAttemptAt: '',
+        lastProfileHash: '',
+        lastServedSource: 'idle'
+    };
+    let recommendationSummaryState = {
+        summary: '',
+        source: 'idle',
+        updatedAt: '',
+        traceId: ''
+    };
     let detailGalleryAutoplayTimer = null;
     const DETAIL_GALLERY_INTERVAL_MS = 2000;
     const REVIEW_MEDIA_MAX_FILES = 4;
@@ -1222,6 +1250,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function recordBrowsingHistory(book) {
         if (!book || !Number.isFinite(Number(book.id))) return;
         const normalizedId = Number(book.id);
+        const previousSignature = JSON.stringify((Array.isArray(browsingHistory) ? browsingHistory : []).map(item => Number(item?.id)));
         browsingHistory = browsingHistory.filter(item => Number(item.id) !== normalizedId);
         browsingHistory.unshift({
             id: normalizedId,
@@ -1233,6 +1262,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         browsingHistory = browsingHistory.slice(0, 30);
         persistHistory();
         renderHistorySidebar();
+        const nextSignature = JSON.stringify((Array.isArray(browsingHistory) ? browsingHistory : []).map(item => Number(item?.id)));
+        if (previousSignature !== nextSignature) {
+            markRecommendationDirty('history_update');
+        }
     }
 
     async function getCurrentSupabaseUserId() {
@@ -1258,6 +1291,21 @@ document.addEventListener('DOMContentLoaded', async function() {
             return data?.user || null;
         } catch {
             return null;
+        }
+    }
+
+    async function getCurrentSupabaseAccessToken() {
+        if (!supabaseClient || !supabaseClient.auth || !supabaseClient.auth.getSession) return '';
+        try {
+            const { data, error } = await supabaseClient.auth.getSession();
+            if (error) {
+                console.warn('Get Supabase session failed:', error);
+                return '';
+            }
+            return String(data?.session?.access_token || '').trim();
+        } catch (e) {
+            console.warn('Unexpected getSession error:', e);
+            return '';
         }
     }
 
@@ -1408,6 +1456,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 favoriteBookIds.add(key);
                 syncFavoriteButtonsForBook(bookId);
                 renderFavoritesSidebar();
+                markRecommendationDirty('favorite_update');
                 showNotification(`已收藏《${(targetBook?.title || '该图书').substring(0, 18)}》`, 'success');
             } else {
                 const { error } = await supabaseClient
@@ -1419,6 +1468,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 favoriteBookIds.delete(key);
                 syncFavoriteButtonsForBook(bookId);
                 renderFavoritesSidebar();
+                markRecommendationDirty('favorite_update');
                 showNotification(`已取消收藏《${(targetBook?.title || '该图书').substring(0, 18)}》`, 'info');
             }
         } catch (e) {
@@ -1452,15 +1502,6 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         if (!supabaseClient) {
             books = cachedBooks;
-            recommendations = getVisibleBooks(books)
-                .slice()
-                .sort((a, b) => (b.rating || 0) - (a.rating || 0))
-                .slice(0, 4)
-                .map((b, i) => ({
-                    id: i + 1,
-                    bookId: b.id,
-                    reason: '基于热门与评分为您推荐'
-                }));
             console.warn('Supabase client not found; using local cached books.');
             return;
         }
@@ -1490,13 +1531,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (!books.length && cachedBooks.length) {
                 books = cachedBooks;
             }
-
-            // 不再请求 `recommendations` 表（避免 404）；直接根据 books 派生推荐
-            recommendations = getVisibleBooks(books).slice().sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 4).map((b, i) => ({
-                id: i + 1,
-                bookId: b.id,
-                reason: '基于热门与评分为您推荐'
-            }));
         } catch (e) {
             console.error('Unexpected error loading from Supabase:', e);
         }
@@ -1505,6 +1539,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     // DOM元素
     const booksGrid = document.querySelector('.books-grid');
     const recommendationsGrid = document.querySelector('.recommendations-grid');
+    const recommendationsSection = document.getElementById('recommendations');
+    const recommendationsSectionSubtitle = recommendationsSection?.querySelector('.section-subtitle') || null;
+    const defaultRecommendationSectionSubtitleText = String(recommendationsSectionSubtitle?.textContent || '基于您的浏览历史和偏好，AI为您精心挑选').trim();
     const cartItemsContainer = document.getElementById('cart-items-container');
     const cartCount = document.querySelector('.cart-count');
     const totalPriceElement = document.querySelector('.total-price');
@@ -1582,6 +1619,1548 @@ document.addEventListener('DOMContentLoaded', async function() {
             userModeBadge.textContent = '未登录';
         }
     }
+
+    function normalizeBookIdValue(value) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+        const normalized = String(value || '').trim();
+        return normalized || null;
+    }
+
+    function normalizeBookIdList(values) {
+        const seen = new Set();
+        return (Array.isArray(values) ? values : [])
+            .map(normalizeBookIdValue)
+            .filter(value => {
+                const key = String(value || '');
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+    }
+
+    function normalizeRecommendationText(value, maxLength = 120) {
+        const normalized = String(value || '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!normalized) return '';
+        return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+    }
+
+    function normalizePreferenceKey(value) {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    function getRecommendationProfileIdentity() {
+        const loginUsername = String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim().toLowerCase();
+        if (currentUserId) return `user:${currentUserId}`;
+        if (loginUsername) return `${sessionStorage.getItem('userType') || 'user'}:${loginUsername}`;
+        return `${sessionStorage.getItem('userType') || 'anon'}:visitor`;
+    }
+
+    function hashRecommendationSeed(input) {
+        let hash = 2166136261;
+        const source = String(input || '');
+        for (let index = 0; index < source.length; index += 1) {
+            hash ^= source.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(36);
+    }
+
+    function getRecommendationServedCacheKey() {
+        return `${RECOMMENDATION_SERVED_CACHE_PREFIX}_${hashRecommendationSeed(getRecommendationProfileIdentity())}`;
+    }
+
+    function getRecommendationMetaStorageKey() {
+        return `${RECOMMENDATION_META_PREFIX}_${hashRecommendationSeed(getRecommendationProfileIdentity())}`;
+    }
+
+    function getRecommendationCacheScopeKey() {
+        return `scope_${hashRecommendationSeed(getRecommendationProfileIdentity())}`;
+    }
+
+    function loadRecommendationMetaState() {
+        try {
+            const raw = safeParseJsonValue(localStorage.getItem(getRecommendationMetaStorageKey()), null);
+            if (!raw || typeof raw !== 'object') return { ...recommendationMetaState };
+            return {
+                dirty: Boolean(raw?.dirty),
+                dirtyReasons: Array.from(new Set((Array.isArray(raw?.dirtyReasons) ? raw.dirtyReasons : []).map(item => String(item || '').trim()).filter(Boolean))),
+                dirtyHintShown: Boolean(raw?.dirtyHintShown),
+                lastSuccessfulRefreshAt: String(raw?.lastSuccessfulRefreshAt || '').trim(),
+                lastAttemptAt: String(raw?.lastAttemptAt || '').trim(),
+                lastProfileHash: String(raw?.lastProfileHash || '').trim(),
+                lastServedSource: String(raw?.lastServedSource || 'idle').trim() || 'idle'
+            };
+        } catch (e) {
+            return { ...recommendationMetaState };
+        }
+    }
+
+    function saveRecommendationMetaState(meta) {
+        const nextMeta = {
+            dirty: Boolean(meta?.dirty),
+            dirtyReasons: Array.from(new Set((Array.isArray(meta?.dirtyReasons) ? meta.dirtyReasons : []).map(item => String(item || '').trim()).filter(Boolean))),
+            dirtyHintShown: Boolean(meta?.dirtyHintShown),
+            lastSuccessfulRefreshAt: String(meta?.lastSuccessfulRefreshAt || '').trim(),
+            lastAttemptAt: String(meta?.lastAttemptAt || '').trim(),
+            lastProfileHash: String(meta?.lastProfileHash || '').trim(),
+            lastServedSource: String(meta?.lastServedSource || 'idle').trim() || 'idle'
+        };
+        recommendationMetaState = nextMeta;
+        try {
+            localStorage.setItem(getRecommendationMetaStorageKey(), JSON.stringify(nextMeta));
+        } catch (e) {
+            console.warn('Save recommendation meta state failed:', e);
+        }
+        return nextMeta;
+    }
+
+    function normalizeFrontendRecommendationEntries(value) {
+        const seen = new Set();
+        return (Array.isArray(value) ? value : []).map((item, index) => {
+            const bookId = normalizeBookIdValue(item?.bookId ?? item?.book_id);
+            const key = String(bookId || '');
+            const reason = normalizeRecommendationText(item?.reason, 60) || '综合你的近期阅读偏好推荐';
+            if (!key || seen.has(key) || !findBookById(bookId)) return null;
+            seen.add(key);
+            return {
+                id: index + 1,
+                bookId: Number(bookId),
+                reason
+            };
+        }).filter(Boolean);
+    }
+
+    function isRecommendationPayloadExpired(payload) {
+        return !payload || Number(payload?.expiresAt || 0) <= Date.now();
+    }
+
+    function loadServedRecommendationCache() {
+        try {
+            const raw = safeParseJsonValue(localStorage.getItem(getRecommendationServedCacheKey()), null);
+            if (!raw || typeof raw !== 'object') return null;
+            const recommendations = normalizeFrontendRecommendationEntries(raw?.recommendations);
+            if (!recommendations.length) return null;
+            return {
+                recommendations,
+                summary: String(raw?.summary || '').trim(),
+                source: String(raw?.source || 'served_cache').trim() || 'served_cache',
+                traceId: String(raw?.traceId || '').trim(),
+                savedAt: Number(raw?.savedAt || 0),
+                expiresAt: Number(raw?.expiresAt || 0),
+                profileHash: String(raw?.profileHash || '').trim()
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function saveServedRecommendationCache(payload, ttlMs) {
+        const recommendationsToSave = normalizeFrontendRecommendationEntries(payload?.recommendations);
+        if (!recommendationsToSave.length) return null;
+        const savedAt = Date.now();
+        const cachePayload = {
+            recommendations: recommendationsToSave,
+            summary: String(payload?.summary || '').trim(),
+            source: String(payload?.source || 'served_cache').trim() || 'served_cache',
+            traceId: String(payload?.traceId || '').trim(),
+            savedAt,
+            expiresAt: savedAt + Math.max(1000, Number(ttlMs) || RECOMMENDATION_SERVED_TTL_MS),
+            profileHash: String(payload?.profileHash || '').trim()
+        };
+        try {
+            localStorage.setItem(getRecommendationServedCacheKey(), JSON.stringify(cachePayload));
+        } catch (e) {
+            console.warn('Save served recommendation cache failed:', e);
+        }
+        return cachePayload;
+    }
+
+    function computeRecommendationProfileHash(profile, candidates) {
+        const cacheSeed = JSON.stringify({
+            identity: getRecommendationProfileIdentity(),
+            isGuest: Boolean(profile?.isGuest),
+            recentViewedBookIds: normalizeBookIdList(profile?.recentViewedBookIds || []),
+            favoriteBookIds: normalizeBookIdList(profile?.favoriteBookIds || []),
+            purchasedBookIds: normalizeBookIdList(profile?.purchasedBookIds || []),
+            preferredCategories: (Array.isArray(profile?.preferredCategories) ? profile.preferredCategories : []).map(item => ({
+                name: String(item?.name || '').trim(),
+                score: Number(item?.score || 0)
+            })),
+            preferredAuthors: (Array.isArray(profile?.preferredAuthors) ? profile.preferredAuthors : []).map(item => ({
+                name: String(item?.name || '').trim(),
+                score: Number(item?.score || 0)
+            })),
+            preferredTags: (Array.isArray(profile?.preferredTags) ? profile.preferredTags : []).map(item => ({
+                name: String(item?.name || '').trim(),
+                score: Number(item?.score || 0)
+            })),
+            pricePreference: {
+                bucket: String(profile?.pricePreference?.bucket || ''),
+                average: Number(profile?.pricePreference?.average || 0),
+                preferredRange: Array.isArray(profile?.pricePreference?.preferredRange) ? profile.pricePreference.preferredRange.map(value => Number(value) || 0) : [0, 0]
+            },
+            candidateIds: (Array.isArray(candidates) ? candidates : []).map(candidate => String(candidate?.bookId || '')),
+            candidateScores: (Array.isArray(candidates) ? candidates : []).map(candidate => (
+                `${String(candidate?.bookId || '')}:${Number(candidate?.candidateScore || candidate?.coarseScore || 0).toFixed(2)}`
+            ))
+        });
+        return hashRecommendationSeed(cacheSeed);
+    }
+
+    function buildRecommendationDirtyHint(dirtyReasons = []) {
+        const reasonSet = new Set((Array.isArray(dirtyReasons) ? dirtyReasons : []).map(item => String(item || '').trim()).filter(Boolean));
+        if (reasonSet.has('purchase_update')) return '已记录购买行为，将优先纳入下一次推荐刷新。';
+        if (!reasonSet.size) return '';
+        if (reasonSet.has('favorite_update')) return '已记录收藏变化，将在下次刷新时纳入推荐。';
+        if (reasonSet.has('history_clear')) return '已记录历史清空，将在下次刷新时更新推荐。';
+        if (reasonSet.has('history_update')) return '已记录最近浏览，将在下次刷新时纳入推荐。';
+        return '偏好变化已记录，将在下次刷新时纳入推荐。';
+    }
+
+    function markRecommendationDirty(reason, options = {}) {
+        const normalizedReason = String(reason || '').trim();
+        const dirtyReasons = Array.from(new Set([
+            ...(Array.isArray(recommendationMetaState?.dirtyReasons) ? recommendationMetaState.dirtyReasons : []),
+            ...(normalizedReason ? [normalizedReason] : [])
+        ]));
+        saveRecommendationMetaState({
+            ...recommendationMetaState,
+            dirty: options?.dirty === false ? false : true,
+            dirtyReasons: options?.dirty === false ? [] : dirtyReasons,
+            dirtyHintShown: false
+        });
+        if (options?.render !== false) {
+            renderRecommendationSummaryState();
+        }
+        if (options?.schedule !== false) {
+            scheduleRecommendationRefresh(normalizedReason || 'behavior_update');
+        }
+        return recommendationMetaState;
+    }
+
+    function isRetryableRecommendationSource(source) {
+        const normalizedSource = String(source || '').trim().toLowerCase();
+        return normalizedSource === 'fallback'
+            || normalizedSource === 'fallback_candidates'
+            || normalizedSource === 'fallback_popular';
+    }
+
+    function shouldRefreshRecommendations(options = {}) {
+        const servedPayload = loadServedRecommendationCache();
+        const servedExpired = isRecommendationPayloadExpired(servedPayload);
+        const lastAttemptAt = recommendationMetaState?.lastAttemptAt ? new Date(recommendationMetaState.lastAttemptAt).getTime() : 0;
+        const attemptAge = lastAttemptAt > 0 ? (Date.now() - lastAttemptAt) : Number.POSITIVE_INFINITY;
+        const throttled = attemptAge < RECOMMENDATION_FALLBACK_TTL_MS;
+        const shouldRetryExpiredFallback = servedExpired && isRetryableRecommendationSource(
+            servedPayload?.source || recommendationMetaState?.lastServedSource
+        );
+
+        if (options?.force) {
+            return {
+                shouldRequest: true,
+                shouldUseServedCache: Boolean(servedPayload?.recommendations?.length && !options?.skipServedApply),
+                servedPayload,
+                servedExpired,
+                throttled: false,
+                decision: 'force'
+            };
+        }
+
+        if (!servedPayload?.recommendations?.length) {
+            return {
+                shouldRequest: true,
+                shouldUseServedCache: false,
+                servedPayload: null,
+                servedExpired: true,
+                throttled: false,
+                decision: 'missing_served_cache'
+            };
+        }
+
+        if (!servedExpired) {
+            return {
+                shouldRequest: Boolean(recommendationMetaState?.dirty) && !throttled,
+                shouldUseServedCache: true,
+                servedPayload,
+                servedExpired: false,
+                throttled,
+                decision: recommendationMetaState?.dirty ? 'served_cache_fresh_dirty' : 'served_cache_fresh'
+            };
+        }
+
+        return {
+            shouldRequest: !throttled,
+            shouldUseServedCache: true,
+            servedPayload,
+            servedExpired: true,
+            throttled,
+            decision: shouldRetryExpiredFallback
+                ? 'served_cache_expired_fallback'
+                : (recommendationMetaState?.dirty ? 'served_cache_expired_dirty' : 'served_cache_expired_clean')
+        };
+    }
+
+    function applyRecommendationPayload(payload, meta = {}) {
+        const nextRecommendations = normalizeFrontendRecommendationEntries(payload?.recommendations);
+        if (!nextRecommendations.length) return false;
+
+        recommendations = nextRecommendations.map((item, index) => ({
+            ...item,
+            id: index + 1
+        }));
+
+        const summaryText = String(payload?.summary || '').trim() || defaultRecommendationSectionSubtitleText;
+        const source = String(payload?.source || 'idle').trim() || 'idle';
+        const traceId = String(payload?.traceId || '').trim();
+
+        saveRecommendationMetaState({
+            ...recommendationMetaState,
+            lastServedSource: source
+        });
+
+        setRecommendationSummaryState(summaryText, source, {
+            traceId,
+            updatedAt: meta?.updatedAt || new Date().toISOString(),
+            allowDirtyHint: meta?.allowDirtyHint
+        });
+        renderRecommendations();
+        return true;
+    }
+
+    function getBookRecommendationRating(book) {
+        const aggregate = getBookAggregateRating(book?.id);
+        if (Number.isFinite(aggregate) && aggregate > 0) return aggregate;
+        const fallback = Number(book?.rating);
+        return Number.isFinite(fallback) ? fallback : 0;
+    }
+
+    function getBookReviewCount(bookId) {
+        const stats = bookRatingStatsMap.get(String(bookId));
+        if (stats && Number(stats.count) > 0) return Number(stats.count);
+        return (Array.isArray(bookReviews) ? bookReviews : []).filter(review => (
+            Number(review?.bookId) === Number(bookId)
+            && normalizeModerationStatus(review?.moderationStatus) === 'approved'
+        )).length;
+    }
+
+    function getUserOrderSignalCount(bookId) {
+        return (Array.isArray(userOrders) ? userOrders : []).reduce((total, order) => {
+            if (normalizeOrderStatus(order?.status) === 'cancelled') return total;
+            const quantity = (Array.isArray(order?.items) ? order.items : []).reduce((sum, item) => {
+                if (Number(item?.bookId) !== Number(bookId)) return sum;
+                return sum + Math.max(1, Number(item?.quantity) || 1);
+            }, 0);
+            return total + quantity;
+        }, 0);
+    }
+
+    function getHistorySignalCount(bookId) {
+        return (Array.isArray(browsingHistory) ? browsingHistory : []).reduce((total, entry, index) => {
+            if (Number(entry?.id) !== Number(bookId)) return total;
+            return total + Math.max(1, 6 - index * 0.4);
+        }, 0);
+    }
+
+    function getVisiblePopularBooks(excludeBookIds = [], limit = RECOMMENDATION_CANDIDATE_LIMIT) {
+        const exclude = new Set(normalizeBookIdList([
+            ...extractPurchasedBookIds(),
+            ...(Array.isArray(excludeBookIds) ? excludeBookIds : [])
+        ]).map(value => String(value)));
+        const titleSort = (left, right) => String(left?.title || '').localeCompare(String(right?.title || ''), 'zh-Hans-CN');
+        return getVisibleBooks(books)
+            .filter(book => !exclude.has(String(book?.id)))
+            .map(book => ({
+                book,
+                popularityScore: (
+                    getBookRecommendationRating(book) * 18
+                    + getBookReviewCount(book?.id) * 6
+                )
+            }))
+            .sort((left, right) => (
+                right.popularityScore - left.popularityScore
+                || getBookRecommendationRating(right.book) - getBookRecommendationRating(left.book)
+                || titleSort(left.book, right.book)
+            ))
+            .slice(0, Math.max(limit, RECOMMENDATION_FALLBACK_LIMIT))
+            .map(item => item.book);
+    }
+
+    function buildPopularFallbackReason(book) {
+        const rating = getBookRecommendationRating(book);
+        const reviewCount = getBookReviewCount(book?.id);
+        if (rating >= 4.5 && reviewCount > 0) return '综合评分稳定靠前，适合作为首页推荐';
+        if (reviewCount >= 2) return '近期口碑表现稳定，值得优先关注';
+        return '基于热门与评分表现，为你稳妥推荐';
+    }
+
+    function ensureRecommendationSummaryElement() {
+        if (!recommendationsSection) return null;
+        const existingSummaryElement = document.getElementById('recommendation-profile-summary');
+        if (recommendationsSectionSubtitle) {
+            if (existingSummaryElement && existingSummaryElement !== recommendationsSectionSubtitle) {
+                existingSummaryElement.remove();
+            }
+            recommendationsSectionSubtitle.id = 'recommendation-profile-summary';
+            return recommendationsSectionSubtitle;
+        }
+
+        if (existingSummaryElement) return existingSummaryElement;
+
+        const summaryElement = document.createElement('p');
+        summaryElement.id = 'recommendation-profile-summary';
+        summaryElement.className = 'section-subtitle';
+        summaryElement.textContent = defaultRecommendationSectionSubtitleText;
+        recommendationsSection.querySelector('.container')?.insertBefore(summaryElement, recommendationsGrid);
+        return summaryElement;
+    }
+
+    function renderRecommendationSummaryState() {
+        const summaryElement = ensureRecommendationSummaryElement();
+        if (!summaryElement) return;
+        summaryElement.textContent = recommendationSummaryState.summary || defaultRecommendationSectionSubtitleText;
+    }
+
+    function setRecommendationSummaryState(summary, source = 'idle', meta = {}) {
+        const baseSummary = String(summary || '').trim() || defaultRecommendationSectionSubtitleText;
+        const shouldShowDirtyHint = Boolean(
+            meta?.allowDirtyHint
+            && meta?.servedCacheContinuation
+            && recommendationMetaState?.dirty
+            && !recommendationMetaState?.dirtyHintShown
+        );
+        const dirtyHint = shouldShowDirtyHint ? buildRecommendationDirtyHint(recommendationMetaState?.dirtyReasons) : '';
+        const nextSummary = dirtyHint && !baseSummary.includes(dirtyHint) ? `${baseSummary} ${dirtyHint}` : baseSummary;
+        recommendationSummaryState = {
+            summary: nextSummary,
+            source: String(source || 'idle').trim() || 'idle',
+            updatedAt: String(meta?.updatedAt || new Date().toISOString()),
+            traceId: String(meta?.traceId || '').trim()
+        };
+        if (dirtyHint) {
+            saveRecommendationMetaState({
+                ...recommendationMetaState,
+                dirtyHintShown: true
+            });
+        }
+        renderRecommendationSummaryState();
+    }
+
+    function getRecommendationRefreshToast(result) {
+        if (result?.authRequired) {
+            return {
+                message: '当前账号未建立云端会话，已切换为本地候选/热门推荐',
+                type: 'info'
+            };
+        }
+        if (result?.cache === 'served_stale') {
+            return {
+                message: '当前先继续展示上次推荐，系统会尽快刷新',
+                type: 'info'
+            };
+        }
+        if (result?.source === 'served_cache') {
+            return {
+                message: '当前继续展示已缓存推荐',
+                type: 'info'
+            };
+        }
+        if (result?.source === 'llm' || result?.source === 'profile_cache') {
+            return {
+                message: '推荐已更新',
+                type: 'success'
+            };
+        }
+        if (result?.source === 'fallback' || result?.source === 'fallback_candidates') {
+            return {
+                message: '智能排序暂不可用，已切换为本地候选推荐',
+                type: 'info'
+            };
+        }
+        if (result?.source === 'fallback_popular') {
+            return {
+                message: '智能排序暂不可用，已切换为热门推荐',
+                type: 'info'
+            };
+        }
+        return {
+            message: '推荐已按热门与评分恢复',
+            type: 'info'
+        };
+    }
+
+    function buildPopularFallbackRecommendations(limit = 4) {
+        const finalLimit = Math.max(1, Number(limit) || RECOMMENDATION_FALLBACK_LIMIT);
+        return getVisiblePopularBooks([], finalLimit)
+            .slice(0, finalLimit)
+            .map((book, index) => ({
+                id: index + 1,
+                bookId: book.id,
+                reason: buildPopularFallbackReason(book)
+            }));
+    }
+
+    function summarizeCandidateRecallSource(candidate) {
+        const sourceSet = new Set(Array.isArray(candidate?.recallSources) ? candidate.recallSources : []);
+        if (sourceSet.has('purchase') && sourceSet.has('favorite')) return '命中你的已购与收藏偏好';
+        if (sourceSet.has('purchase')) return '延续你已购图书的阅读方向';
+        if (sourceSet.has('favorite') && sourceSet.has('history')) return '同时参考了你的收藏与近期浏览';
+        if (sourceSet.has('favorite')) return '结合你的收藏偏好优先推荐';
+        if (sourceSet.has('history')) return '延续你最近浏览的阅读兴趣';
+        if (sourceSet.has('popular')) return '在当前候选中热度与口碑都较稳';
+        return '综合你的近期阅读偏好推荐';
+    }
+
+    function buildCandidateFallbackReason(candidate) {
+        const sourceText = summarizeCandidateRecallSource(candidate);
+        const hint = normalizeRecommendationText((Array.isArray(candidate?.reasonHints) ? candidate.reasonHints[0] : '') || '', 24);
+        if (sourceText && hint) return `${sourceText}，${hint}`;
+        return sourceText || hint || '综合你的近期阅读偏好推荐';
+    }
+
+    function buildFallbackFromCandidates(candidates, limit = 4) {
+        const finalLimit = Math.max(1, Number(limit) || RECOMMENDATION_FALLBACK_LIMIT);
+        const pickedIds = new Set();
+        const results = [];
+        (Array.isArray(candidates) ? candidates : [])
+            .map((candidate, index) => ({ candidate, index }))
+            .sort((left, right) => (
+                ((Number(left?.candidate?.candidateRank || 0) > 0 ? Number(left.candidate.candidateRank) : Number.POSITIVE_INFINITY)
+                    - (Number(right?.candidate?.candidateRank || 0) > 0 ? Number(right.candidate.candidateRank) : Number.POSITIVE_INFINITY))
+                || (Number(right?.candidate?.candidateScore || right?.candidate?.coarseScore || 0) - Number(left?.candidate?.candidateScore || left?.candidate?.coarseScore || 0))
+                || (left.index - right.index)
+            ))
+            .forEach(({ candidate }) => {
+                const book = findBookById(candidate?.bookId);
+                const key = String(candidate?.bookId || '');
+                if (!book || !key || pickedIds.has(key) || results.length >= finalLimit) return;
+                pickedIds.add(key);
+                results.push({
+                    id: results.length + 1,
+                    bookId: book.id,
+                    reason: buildCandidateFallbackReason(candidate)
+                });
+            });
+
+        if (results.length < finalLimit) {
+            getVisiblePopularBooks(Array.from(pickedIds), finalLimit).forEach(book => {
+                if (results.length >= finalLimit || pickedIds.has(String(book.id))) return;
+                pickedIds.add(String(book.id));
+                results.push({
+                    id: results.length + 1,
+                    bookId: book.id,
+                    reason: buildPopularFallbackReason(book)
+                });
+            });
+        }
+
+        return results.slice(0, finalLimit);
+    }
+
+    function computeRecommendationProfileCacheKey(profile, candidates) {
+        return `${RECOMMENDATION_CACHE_PREFIX}_${computeRecommendationProfileHash(profile, candidates)}`;
+    }
+
+    function loadProfileRecommendationCache(cacheKey) {
+        if (!cacheKey) return null;
+        try {
+            const raw = safeParseJsonValue(localStorage.getItem(cacheKey), null);
+            if (!raw || typeof raw !== 'object') return null;
+            const savedAt = Number(raw?.savedAt || 0);
+            if (!savedAt || (Date.now() - savedAt) > RECOMMENDATION_CACHE_TTL_MS) {
+                localStorage.removeItem(cacheKey);
+                return null;
+            }
+            const cachedRecommendations = normalizeFrontendRecommendationEntries(raw?.recommendations);
+            if (!cachedRecommendations.length) return null;
+            return {
+                recommendations: cachedRecommendations,
+                summary: String(raw?.summary || '').trim(),
+                source: String(raw?.source || 'profile_cache').trim() || 'profile_cache',
+                traceId: String(raw?.traceId || '').trim(),
+                savedAt,
+                profileHash: String(raw?.profileHash || '').trim()
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function saveProfileRecommendationCache(cacheKey, payload) {
+        if (!cacheKey) return;
+        try {
+            localStorage.setItem(cacheKey, JSON.stringify({
+                ...payload,
+                recommendations: normalizeFrontendRecommendationEntries(payload?.recommendations),
+                savedAt: Date.now()
+            }));
+        } catch (e) {
+            console.warn('Save profile recommendation cache failed:', e);
+        }
+    }
+
+    function extractPurchasedBookIds() {
+        const seen = new Set();
+        const purchasedBookIds = [];
+        (Array.isArray(userOrders) ? userOrders : []).forEach(order => {
+            if (normalizeOrderStatus(order?.status) === 'cancelled') return;
+            (Array.isArray(order?.items) ? order.items : []).forEach(item => {
+                const normalizedId = normalizeBookIdValue(item?.bookId);
+                const key = String(normalizedId || '');
+                if (!normalizedId || seen.has(key)) return;
+                seen.add(key);
+                purchasedBookIds.push(normalizedId);
+            });
+        });
+        return purchasedBookIds;
+    }
+
+    function collectBehaviorBooks() {
+        const behaviorBooks = [];
+        const appendBehaviorBook = (bookId, source, weight) => {
+            const book = findBookById(bookId, { includeDisabled: true });
+            if (!book) return;
+            behaviorBooks.push({ book, source, weight });
+        };
+
+        normalizeBookIdList((Array.isArray(browsingHistory) ? browsingHistory : []).map(entry => entry?.id)).slice(0, 8).forEach(bookId => {
+            appendBehaviorBook(bookId, 'history', 1.4);
+        });
+
+        normalizeBookIdList(Array.from(favoriteBookIds)).slice(0, 8).forEach(bookId => {
+            appendBehaviorBook(bookId, 'favorite', 2.2);
+        });
+
+        extractPurchasedBookIds().slice(0, 8).forEach(bookId => {
+            appendBehaviorBook(bookId, 'purchase', 3.0);
+        });
+
+        return behaviorBooks;
+    }
+
+    function rankBehaviorPreferences(behaviorBooks, extractor, limit = 5) {
+        const buckets = new Map();
+        (Array.isArray(behaviorBooks) ? behaviorBooks : []).forEach(entry => {
+            const output = extractor(entry?.book, entry);
+            const items = Array.isArray(output) ? output : [output];
+            const seen = new Set();
+            items.forEach(item => {
+                const sourceItem = typeof item === 'string' ? {
+                    key: item,
+                    name: item,
+                    label: item
+                } : (item || {});
+                const key = normalizePreferenceKey(sourceItem?.key ?? sourceItem?.name ?? sourceItem?.label);
+                const name = String(sourceItem?.name ?? sourceItem?.label ?? sourceItem?.key ?? '').trim();
+                const label = String(sourceItem?.label ?? sourceItem?.name ?? sourceItem?.key ?? '').trim() || name;
+                if (!key || !name || seen.has(key)) return;
+                seen.add(key);
+                const bucket = buckets.get(key) || { name, label, score: 0 };
+                bucket.score += Number(entry?.weight) || 0;
+                buckets.set(key, bucket);
+            });
+        });
+
+        return Array.from(buckets.values())
+            .sort((left, right) => (
+                right.score - left.score
+                || String(left.label || left.name || '').localeCompare(String(right.label || right.name || ''), 'zh-Hans-CN')
+            ))
+            .slice(0, Math.max(1, Number(limit) || 5))
+            .map(item => ({
+                ...item,
+                score: Number(item.score.toFixed(2))
+            }));
+    }
+
+    function inferPreferredCategories(behaviorBooks) {
+        return rankBehaviorPreferences(behaviorBooks, book => ({
+            key: book?.category,
+            name: String(book?.category || '').trim(),
+            label: getCategoryName(book?.category)
+        }), 4);
+    }
+
+    function inferPreferredAuthors(behaviorBooks) {
+        return rankBehaviorPreferences(behaviorBooks, book => ({
+            key: book?.author,
+            name: String(book?.author || '').trim()
+        }), 4);
+    }
+
+    function inferPreferredTags(behaviorBooks) {
+        return rankBehaviorPreferences(behaviorBooks, book => normalizeTextList(book?.tags).map(tag => ({
+            key: tag,
+            name: String(tag || '').trim()
+        })), 6);
+    }
+
+    function inferPricePreference(behaviorBooks) {
+        const priceSamples = (Array.isArray(behaviorBooks) ? behaviorBooks : [])
+            .map(entry => ({
+                price: Number(entry?.book?.price),
+                weight: Number(entry?.weight) || 0
+            }))
+            .filter(item => Number.isFinite(item.price) && item.price > 0 && item.weight > 0);
+
+        if (!priceSamples.length) {
+            return {
+                bucket: 'medium',
+                label: '',
+                average: 0,
+                min: 0,
+                max: 0,
+                preferredRange: [0, 0]
+            };
+        }
+
+        const weightedTotal = priceSamples.reduce((sum, item) => sum + item.price * item.weight, 0);
+        const weightTotal = priceSamples.reduce((sum, item) => sum + item.weight, 0) || 1;
+        const average = Number((weightedTotal / weightTotal).toFixed(2));
+        const min = Number(Math.min(...priceSamples.map(item => item.price)).toFixed(2));
+        const max = Number(Math.max(...priceSamples.map(item => item.price)).toFixed(2));
+        const lowerBound = Number(Math.max(0, average * 0.7).toFixed(2));
+        const upperBound = Number(Math.max(max, average * 1.3).toFixed(2));
+        let bucket = 'medium';
+        let label = '偏好中等价位';
+        if (average < 50) {
+            bucket = 'low';
+            label = '偏好亲民价位';
+        } else if (average > 90) {
+            bucket = 'high';
+            label = '偏好较高价位';
+        }
+
+        return {
+            bucket,
+            label,
+            average,
+            min,
+            max,
+            preferredRange: [lowerBound, upperBound]
+        };
+    }
+
+    function buildRecentInterestSummary(profile) {
+        const categories = (Array.isArray(profile?.preferredCategories) ? profile.preferredCategories : [])
+            .slice(0, 2)
+            .map(item => item?.label || getCategoryName(item?.name))
+            .filter(Boolean);
+        const authors = (Array.isArray(profile?.preferredAuthors) ? profile.preferredAuthors : [])
+            .slice(0, 1)
+            .map(item => item?.name)
+            .filter(Boolean);
+        const tags = (Array.isArray(profile?.preferredTags) ? profile.preferredTags : [])
+            .slice(0, 2)
+            .map(item => item?.name)
+            .filter(Boolean);
+        const priceLabel = String(profile?.pricePreference?.label || '').trim();
+
+        const parts = [];
+        if (categories.length) parts.push(`最近偏向${categories.join('、')}`);
+        if (authors.length) parts.push(`关注${authors.join('、')}等作者`);
+        if (tags.length) parts.push(`常看${tags.join('、')}相关主题`);
+        if (priceLabel) parts.push(priceLabel);
+        if (!parts.length) return '近期行为信号较少，将结合热门图书为你补充推荐。';
+        return `${parts.join('，')}。`;
+    }
+
+    function buildProfileConfidence(profile) {
+        const signalScore = (
+            normalizeBookIdList(profile?.recentViewedBookIds || []).length * 1.4
+            + normalizeBookIdList(profile?.favoriteBookIds || []).length * 2.2
+            + normalizeBookIdList(profile?.purchasedBookIds || []).length * 3.0
+        );
+        if (signalScore >= 15) return 'high';
+        if (signalScore >= 6) return 'medium';
+        return 'low';
+    }
+
+    function buildUserPreferenceProfile() {
+        const recentViewedBookIds = normalizeBookIdList((Array.isArray(browsingHistory) ? browsingHistory : []).map(entry => entry?.id)).slice(0, 8);
+        const favoriteIds = normalizeBookIdList(Array.from(favoriteBookIds)).slice(0, 12);
+        const purchasedBookIds = extractPurchasedBookIds();
+        const behaviorBooks = collectBehaviorBooks();
+
+        const profile = {
+            userId: currentUserId || getRecommendationProfileIdentity(),
+            isGuest: isGuestUser(),
+            recentViewedBookIds,
+            favoriteBookIds: favoriteIds,
+            purchasedBookIds,
+            preferredCategories: inferPreferredCategories(behaviorBooks),
+            preferredAuthors: inferPreferredAuthors(behaviorBooks),
+            preferredTags: inferPreferredTags(behaviorBooks),
+            pricePreference: inferPricePreference(behaviorBooks),
+            recentInterestSummary: '',
+            profileConfidence: 'low'
+        };
+
+        profile.recentInterestSummary = buildRecentInterestSummary(profile);
+        profile.profileConfidence = buildProfileConfidence(profile);
+        return profile;
+    }
+
+    function buildCandidateFromBook(book, source, seedScore = 0, sourceBookId = null) {
+        if (!book || !Number.isFinite(Number(book.id))) return null;
+        const rating = getBookRecommendationRating(book);
+        return {
+            bookId: Number(book.id),
+            title: String(book.title || '未命名图书').trim(),
+            author: String(book.author || '未知作者').trim(),
+            category: String(book.category || '').trim(),
+            price: Number(book.price || 0) || 0,
+            rating: Number.isFinite(rating) ? Number(rating.toFixed(2)) : 0,
+            tags: normalizeTextList(book.tags).map(tag => String(tag || '').trim()).filter(Boolean),
+            description: normalizeRecommendationText(book.description, 180),
+            candidateScore: Number(seedScore || 0),
+            seedScore: Number(seedScore || 0),
+            contentScore: 0,
+            coarseScore: Number(seedScore || 0),
+            recallSources: source ? [String(source).trim()] : [],
+            sourceBookIds: sourceBookId !== null && sourceBookId !== undefined ? [normalizeBookIdValue(sourceBookId)] : [],
+            reasonHints: []
+        };
+    }
+
+    function mergeDedupCandidates(candidateGroups) {
+        const mergedMap = new Map();
+        (Array.isArray(candidateGroups) ? candidateGroups : []).forEach(group => {
+            (Array.isArray(group) ? group : []).forEach(candidate => {
+                if (!candidate || !candidate.bookId) return;
+                const key = String(candidate.bookId);
+                const existing = mergedMap.get(key);
+                if (!existing) {
+                    mergedMap.set(key, {
+                        ...candidate,
+                        recallSources: Array.from(new Set(candidate.recallSources || [])),
+                        sourceBookIds: normalizeBookIdList(candidate.sourceBookIds || []),
+                        reasonHints: Array.from(new Set((candidate.reasonHints || []).filter(Boolean)))
+                    });
+                    return;
+                }
+
+                existing.seedScore += Number(candidate.seedScore || 0);
+                existing.candidateScore += Number(candidate.candidateScore || 0);
+                existing.coarseScore = existing.seedScore + Number(existing.contentScore || 0);
+                existing.recallSources = Array.from(new Set([
+                    ...(existing.recallSources || []),
+                    ...(candidate.recallSources || [])
+                ]));
+                existing.sourceBookIds = normalizeBookIdList([
+                    ...(existing.sourceBookIds || []),
+                    ...(candidate.sourceBookIds || [])
+                ]);
+                existing.reasonHints = Array.from(new Set([
+                    ...(existing.reasonHints || []),
+                    ...(candidate.reasonHints || [])
+                ].filter(Boolean)));
+            });
+        });
+        return Array.from(mergedMap.values());
+    }
+
+    function collectRecallCandidatesBySource(bookIds, source, limitPerBook, sourceBoost) {
+        const results = [];
+        normalizeBookIdList(bookIds).forEach(bookId => {
+            const sourceBook = findBookById(bookId, { includeDisabled: true });
+            if (!sourceBook) return;
+            getRelatedBooks(sourceBook, limitPerBook).forEach((item, index) => {
+                const candidate = buildCandidateFromBook(
+                    item?.book,
+                    source,
+                    Number(item?.score || 0) + Number(sourceBoost || 0) + Math.max(0, limitPerBook - index),
+                    sourceBook.id
+                );
+                if (!candidate) return;
+                if (item?.reason) candidate.reasonHints.push(normalizeRecommendationText(item.reason, 30));
+                results.push(candidate);
+            });
+        });
+        return results;
+    }
+
+    function collectHistoryRecallCandidates(profile, limitPerBook = 6) {
+        return collectRecallCandidatesBySource(profile?.recentViewedBookIds?.slice(0, 3) || [], 'history', limitPerBook, 6);
+    }
+
+    function collectFavoriteRecallCandidates(profile, limitPerBook = 6) {
+        return collectRecallCandidatesBySource(profile?.favoriteBookIds?.slice(0, 4) || [], 'favorite', limitPerBook, 10);
+    }
+
+    function collectPurchaseRecallCandidates(profile, limitPerBook = 6) {
+        return collectRecallCandidatesBySource(profile?.purchasedBookIds?.slice(0, 4) || [], 'purchase', limitPerBook, 14);
+    }
+
+    function collectPopularRecallCandidates(limit = 8, excludeBookIds = []) {
+        return getVisiblePopularBooks(excludeBookIds, limit).map((book, index) => {
+            const candidate = buildCandidateFromBook(book, 'popular', Math.max(1, limit - index) + getBookRecommendationRating(book) * 4);
+            if (!candidate) return null;
+            candidate.reasonHints.push(buildPopularFallbackReason(book));
+            return candidate;
+        }).filter(Boolean);
+    }
+
+    function buildPreferenceWeightMap(preferences) {
+        const map = new Map();
+        (Array.isArray(preferences) ? preferences : []).forEach(item => {
+            const key = normalizePreferenceKey(item?.name ?? item?.label ?? item?.key);
+            if (!key) return;
+            map.set(key, Number(item?.score) || 0);
+        });
+        return map;
+    }
+
+    function applyCandidateContentScore(candidate, profile) {
+        if (!candidate) return null;
+        const authorWeights = buildPreferenceWeightMap(profile?.preferredAuthors);
+        const categoryWeights = buildPreferenceWeightMap(profile?.preferredCategories);
+        const tagWeights = buildPreferenceWeightMap(profile?.preferredTags);
+        const candidateAuthorKey = normalizePreferenceKey(candidate.author);
+        const candidateCategoryKey = normalizePreferenceKey(candidate.category);
+        const candidateTagKeys = normalizeTextList(candidate.tags).map(tag => normalizePreferenceKey(tag)).filter(Boolean);
+        const matchedSignals = [];
+        let contentScore = 0;
+
+        if (authorWeights.has(candidateAuthorKey)) {
+            const authorWeight = authorWeights.get(candidateAuthorKey) || 0;
+            contentScore += 18 + authorWeight * 2.4;
+            matchedSignals.push('author');
+        }
+
+        if (categoryWeights.has(candidateCategoryKey)) {
+            const categoryWeight = categoryWeights.get(candidateCategoryKey) || 0;
+            contentScore += 12 + categoryWeight * 2;
+            matchedSignals.push('category');
+        }
+
+        const sharedTags = [];
+        candidateTagKeys.forEach(tag => {
+            if (!tagWeights.has(tag) || sharedTags.includes(tag) || sharedTags.length >= 3) return;
+            sharedTags.push(tag);
+            contentScore += 5 + (tagWeights.get(tag) || 0) * 1.6;
+        });
+        if (sharedTags.length) matchedSignals.push('tags');
+
+        const preferredRange = Array.isArray(profile?.pricePreference?.preferredRange) ? profile.pricePreference.preferredRange : [];
+        const averagePrice = Number(profile?.pricePreference?.average || 0);
+        const candidatePrice = Number(candidate.price || 0);
+        if (candidatePrice > 0 && preferredRange.length === 2) {
+            const [lowerBound, upperBound] = preferredRange.map(value => Number(value) || 0);
+            if (candidatePrice >= lowerBound && candidatePrice <= upperBound) {
+                contentScore += 8;
+                matchedSignals.push('price');
+            } else if (averagePrice > 0 && Math.abs(candidatePrice - averagePrice) / averagePrice <= 0.35) {
+                contentScore += 4;
+                matchedSignals.push('price');
+            }
+        }
+
+        const rating = Number(candidate.rating || 0);
+        contentScore += Math.min(10, Math.max(0, rating) * 2);
+
+        candidate.contentScore = Number(contentScore.toFixed(2));
+        candidate.candidateScore = Number((Number(candidate.seedScore || 0) + candidate.contentScore).toFixed(2));
+        candidate.coarseScore = candidate.candidateScore;
+        candidate.matchedSignals = matchedSignals;
+        return candidate;
+    }
+
+    function applyCandidateBusinessFilters(candidates, profile) {
+        const purchasedBookIdSet = new Set(normalizeBookIdList(profile?.purchasedBookIds || []).map(value => String(value)));
+        return (Array.isArray(candidates) ? candidates : []).filter(candidate => {
+            const key = String(candidate?.bookId || '');
+            const book = findBookById(candidate?.bookId);
+            if (!key || !book) return false;
+            if (purchasedBookIdSet.has(key)) return false;
+            if (!isBookVisible(book)) return false;
+            if (!String(book?.title || '').trim()) return false;
+            return Number.isFinite(Number(book?.id));
+        });
+    }
+
+    function rerankCandidatesForDiversity(candidates, limit = 18) {
+        const pool = (Array.isArray(candidates) ? candidates : []).slice().sort((left, right) => (
+            Number(right?.candidateScore || 0) - Number(left?.candidateScore || 0)
+            || Number(right?.rating || 0) - Number(left?.rating || 0)
+            || String(left?.title || '').localeCompare(String(right?.title || ''), 'zh-Hans-CN')
+        ));
+        const selected = [];
+        const authorCounts = new Map();
+        const categoryCounts = new Map();
+
+        while (pool.length && selected.length < Math.max(1, Number(limit) || RECOMMENDATION_CANDIDATE_LIMIT)) {
+            let bestIndex = 0;
+            let bestScore = -Infinity;
+
+            pool.forEach((candidate, index) => {
+                const authorKey = normalizePreferenceKey(candidate?.author);
+                const categoryKey = normalizePreferenceKey(candidate?.category);
+                const authorPenalty = (authorCounts.get(authorKey) || 0) * 18;
+                const categoryPenalty = (categoryCounts.get(categoryKey) || 0) * 6;
+                const sourceBonus = (candidate?.recallSources || []).length > 1 ? 4 : 0;
+                const adjustedScore = Number(candidate?.candidateScore || 0) - authorPenalty - categoryPenalty + sourceBonus;
+                if (adjustedScore > bestScore) {
+                    bestScore = adjustedScore;
+                    bestIndex = index;
+                }
+            });
+
+            const [chosen] = pool.splice(bestIndex, 1);
+            selected.push(chosen);
+
+            const authorKey = normalizePreferenceKey(chosen?.author);
+            const categoryKey = normalizePreferenceKey(chosen?.category);
+            if (authorKey) authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
+            if (categoryKey) categoryCounts.set(categoryKey, (categoryCounts.get(categoryKey) || 0) + 1);
+        }
+
+        return selected;
+    }
+
+    function buildRecommendationCandidates(profile, options = {}) {
+        const targetLimit = Math.min(20, Math.max(15, Number(options?.limit) || RECOMMENDATION_CANDIDATE_LIMIT));
+        const historyCandidates = collectHistoryRecallCandidates(profile, 6);
+        const favoriteCandidates = collectFavoriteRecallCandidates(profile, 6);
+        const purchaseCandidates = collectPurchaseRecallCandidates(profile, 6);
+        const seedBookIds = [
+            ...(profile?.recentViewedBookIds || []),
+            ...(profile?.favoriteBookIds || []),
+            ...(profile?.purchasedBookIds || [])
+        ];
+        const popularCandidates = collectPopularRecallCandidates(targetLimit, seedBookIds);
+
+        let mergedCandidates = mergeDedupCandidates([
+            purchaseCandidates,
+            favoriteCandidates,
+            historyCandidates,
+            popularCandidates
+        ]);
+
+        mergedCandidates = applyCandidateBusinessFilters(mergedCandidates, profile)
+            .map(candidate => applyCandidateContentScore(candidate, profile))
+            .filter(Boolean);
+
+        if (mergedCandidates.length < targetLimit) {
+            const additionalPopularCandidates = collectPopularRecallCandidates(targetLimit + 6, mergedCandidates.map(candidate => candidate.bookId));
+            mergedCandidates = mergeDedupCandidates([mergedCandidates, additionalPopularCandidates]);
+            mergedCandidates = applyCandidateBusinessFilters(mergedCandidates, profile)
+                .map(candidate => applyCandidateContentScore(candidate, profile))
+                .filter(Boolean);
+        }
+
+        return rerankCandidatesForDiversity(mergedCandidates, targetLimit).map((candidate, index) => ({
+            ...candidate,
+            candidateRank: index + 1,
+            recallSources: Array.from(new Set(candidate.recallSources || [])),
+            sourceBookIds: normalizeBookIdList(candidate.sourceBookIds || [])
+        }));
+    }
+
+    function buildRecommendationRequestPayload(profile, candidates, options = {}) {
+        const sanitizedProfile = {
+            userId: profile?.isGuest ? 'guest' : 'authenticated_user',
+            isGuest: Boolean(profile?.isGuest),
+            recentViewedBookIds: normalizeBookIdList(profile?.recentViewedBookIds || []).slice(0, 8),
+            favoriteBookIds: normalizeBookIdList(profile?.favoriteBookIds || []).slice(0, 12),
+            purchasedBookIds: normalizeBookIdList(profile?.purchasedBookIds || []).slice(0, 12),
+            preferredCategories: (Array.isArray(profile?.preferredCategories) ? profile.preferredCategories : []).map(item => ({
+                name: String(item?.name || '').trim(),
+                label: String(item?.label || getCategoryName(item?.name)).trim(),
+                score: Number(item?.score || 0)
+            })).filter(item => item.name),
+            preferredAuthors: (Array.isArray(profile?.preferredAuthors) ? profile.preferredAuthors : []).map(item => ({
+                name: String(item?.name || '').trim(),
+                score: Number(item?.score || 0)
+            })).filter(item => item.name),
+            preferredTags: (Array.isArray(profile?.preferredTags) ? profile.preferredTags : []).map(item => ({
+                name: String(item?.name || '').trim(),
+                score: Number(item?.score || 0)
+            })).filter(item => item.name),
+            pricePreference: {
+                bucket: String(profile?.pricePreference?.bucket || 'medium'),
+                label: String(profile?.pricePreference?.label || '').trim(),
+                average: Number(profile?.pricePreference?.average || 0),
+                min: Number(profile?.pricePreference?.min || 0),
+                max: Number(profile?.pricePreference?.max || 0),
+                preferredRange: Array.isArray(profile?.pricePreference?.preferredRange) ? profile.pricePreference.preferredRange.slice(0, 2).map(value => Number(value) || 0) : [0, 0]
+            },
+            recentInterestSummary: normalizeRecommendationText(profile?.recentInterestSummary, 120),
+            profileConfidence: String(profile?.profileConfidence || 'low')
+        };
+
+        return {
+            scene: {
+                name: 'homepage_recommendations_mvp',
+                reason: String(options?.reason || 'init')
+            },
+            cacheScopeKey: String(options?.cacheScopeKey || '').trim(),
+            profileHash: String(options?.profileHash || '').trim(),
+            force: Boolean(options?.force),
+            profile: sanitizedProfile,
+            candidates: (Array.isArray(candidates) ? candidates : []).map(candidate => ({
+                book_id: Number(candidate?.bookId),
+                title: String(candidate?.title || '').trim(),
+                author: String(candidate?.author || '').trim(),
+                category: String(candidate?.category || '').trim(),
+                price: Number(candidate?.price || 0),
+                rating: Number(candidate?.rating || 0),
+                tags: normalizeTextList(candidate?.tags).map(tag => String(tag || '').trim()).filter(Boolean).slice(0, 8),
+                description: normalizeRecommendationText(candidate?.description, 220),
+                candidate_rank: Number(candidate?.candidateRank || 0),
+                candidate_score: Number(candidate?.candidateScore || candidate?.coarseScore || 0),
+                recall_sources: Array.from(new Set(candidate?.recallSources || [])),
+                source_book_ids: normalizeBookIdList(candidate?.sourceBookIds || []).slice(0, 6)
+            })).filter(candidate => Number.isFinite(candidate.book_id))
+        };
+    }
+
+    async function fetchWithTimeout(url, options, timeoutMs) {
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const externalSignal = options?.signal;
+        let timeoutId = null;
+        let removeAbortListener = null;
+        if (controller) {
+            if (externalSignal) {
+                if (externalSignal.aborted) {
+                    controller.abort(externalSignal.reason);
+                } else if (externalSignal.addEventListener) {
+                    const onAbort = () => controller.abort(externalSignal.reason);
+                    externalSignal.addEventListener('abort', onAbort, { once: true });
+                    removeAbortListener = () => externalSignal.removeEventListener('abort', onAbort);
+                }
+            }
+            timeoutId = window.setTimeout(() => controller.abort(new DOMException('Request timeout', 'AbortError')), Math.max(1, Number(timeoutMs) || 10000));
+        }
+
+        try {
+            return await fetch(url, {
+                ...(options || {}),
+                signal: controller?.signal || externalSignal
+            });
+        } finally {
+            if (timeoutId) window.clearTimeout(timeoutId);
+            if (removeAbortListener) removeAbortListener();
+        }
+    }
+
+    function getRecommendationApiUrl() {
+        if (!SUPABASE_URL) return '';
+        return `${SUPABASE_URL.replace(/\/$/, '')}/functions/v1/recommendations-rank`;
+    }
+
+    async function fetchLLMRecommendations(profile, candidates, options = {}) {
+        const apiUrl = getRecommendationApiUrl();
+        if (!apiUrl) throw new Error('Recommendation API URL is not configured');
+
+        const bearerToken = String(options?.accessToken || '').trim() || await getCurrentSupabaseAccessToken();
+        if (!bearerToken) {
+            throw new Error('Recommendation API requires an authenticated session');
+        }
+
+        const response = await fetchWithTimeout(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${bearerToken}`
+            },
+            body: JSON.stringify(buildRecommendationRequestPayload(profile, candidates, options)),
+            signal: options?.signal
+        }, 12000);
+
+        const rawText = await response.text();
+        let parsed;
+        try {
+            parsed = rawText ? JSON.parse(rawText) : {};
+        } catch (e) {
+            throw new Error('Recommendation API returned invalid JSON');
+        }
+
+        if (!response.ok) {
+            const message = String(parsed?.error || parsed?.message || response.statusText || 'Recommendation API request failed');
+            throw new Error(message);
+        }
+
+        return parsed;
+    }
+
+    function validateRecommendationApiItems(items, candidates) {
+        const candidateMap = new Map((Array.isArray(candidates) ? candidates : []).map(candidate => [String(candidate?.bookId), candidate]));
+        const seen = new Set();
+        return (Array.isArray(items) ? items : []).map(item => {
+            const bookId = normalizeBookIdValue(item?.book_id ?? item?.bookId);
+            const key = String(bookId || '');
+            const reason = normalizeRecommendationText(item?.reason, 60);
+            if (!key || !candidateMap.has(key) || seen.has(key) || !reason) return null;
+            seen.add(key);
+            return {
+                book_id: Number(bookId),
+                reason
+            };
+        }).filter(Boolean);
+    }
+
+    function normalizeRecommendationApiResult(raw, candidates) {
+        const items = validateRecommendationApiItems(raw?.items || raw?.result?.items, candidates);
+        return {
+            ok: items.length > 0,
+            items,
+            profileSummary: normalizeRecommendationText(
+                raw?.profile_summary || raw?.profileSummary || raw?.summary || raw?.result?.profile_summary || raw?.result?.profileSummary,
+                120
+            ),
+            source: String(raw?.source || raw?.meta?.source || 'llm').trim() || 'llm',
+            meta: {
+                traceId: String(raw?.meta?.trace_id || raw?.trace_id || '').trim(),
+                candidateCount: Number(raw?.meta?.candidate_count || (Array.isArray(candidates) ? candidates.length : 0)),
+                message: String(raw?.meta?.message || raw?.message || '').trim(),
+                cacheHit: Boolean(raw?.meta?.cache_hit),
+                cacheTtlMs: Number(raw?.meta?.cache_ttl_ms || 0)
+            }
+        };
+    }
+
+    function mapRecommendationItemsToFrontend(items) {
+        return (Array.isArray(items) ? items : []).map((item, index) => ({
+            id: index + 1,
+            bookId: Number(item?.book_id),
+            reason: normalizeRecommendationText(item?.reason, 60) || '综合你的近期阅读偏好推荐'
+        })).filter(item => Number.isFinite(item.bookId));
+    }
+
+    async function executeRecommendationRefresh({ force = false, reason = 'init', source = 'soft' } = {}) {
+        const requestToken = ++recommendationRequestToken;
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        recommendationAbortController = controller;
+        const applyIfLatest = callback => {
+            if (requestToken !== recommendationRequestToken) return false;
+            callback();
+            return true;
+        };
+        const updateMeta = patch => saveRecommendationMetaState({
+            ...recommendationMetaState,
+            ...patch
+        });
+
+        try {
+            updateMeta({
+                lastAttemptAt: new Date().toISOString()
+            });
+
+            const profile = buildUserPreferenceProfile();
+            const candidates = buildRecommendationCandidates(profile, { limit: RECOMMENDATION_CANDIDATE_LIMIT });
+            const profileHash = computeRecommendationProfileHash(profile, candidates);
+            updateMeta({
+                lastProfileHash: profileHash
+            });
+
+            if (!candidates.length) {
+                const emptyPayload = {
+                    recommendations: buildPopularFallbackRecommendations(RECOMMENDATION_FALLBACK_LIMIT),
+                    summary: '行为信号不足，已按当前口碑与热门图书为你补充推荐。',
+                    source: 'fallback_popular',
+                    traceId: '',
+                    profileHash
+                };
+                saveServedRecommendationCache(emptyPayload, RECOMMENDATION_SERVED_TTL_MS);
+                updateMeta({
+                    dirty: false,
+                    dirtyReasons: [],
+                    lastSuccessfulRefreshAt: new Date().toISOString(),
+                    lastServedSource: emptyPayload.source
+                });
+                applyIfLatest(() => applyRecommendationPayload(emptyPayload, { allowDirtyHint: false }));
+                return {
+                    ok: true,
+                    source: emptyPayload.source,
+                    recommendations: emptyPayload.recommendations
+                };
+            }
+
+            const profileCacheKey = computeRecommendationProfileCacheKey(profile, candidates);
+            if (!force) {
+                const cachedPayload = loadProfileRecommendationCache(profileCacheKey);
+                if (cachedPayload?.recommendations?.length) {
+                    const profilePayload = {
+                        ...cachedPayload,
+                        source: 'profile_cache',
+                        profileHash
+                    };
+                    saveServedRecommendationCache(profilePayload, RECOMMENDATION_SERVED_TTL_MS);
+                    updateMeta({
+                        dirty: false,
+                        dirtyReasons: [],
+                        lastSuccessfulRefreshAt: new Date().toISOString(),
+                        lastServedSource: profilePayload.source,
+                        lastProfileHash: profileHash
+                    });
+                    applyIfLatest(() => applyRecommendationPayload(profilePayload, { allowDirtyHint: false }));
+                    return {
+                        ok: true,
+                        source: profilePayload.source,
+                        traceId: profilePayload.traceId || '',
+                        recommendations: profilePayload.recommendations
+                    };
+                }
+            }
+
+            const accessToken = await getCurrentSupabaseAccessToken();
+            if (!accessToken) {
+                const fallbackRecommendations = buildFallbackFromCandidates(candidates, RECOMMENDATION_FALLBACK_LIMIT);
+                const privateFallbackPayload = {
+                    recommendations: fallbackRecommendations.length ? fallbackRecommendations : buildPopularFallbackRecommendations(RECOMMENDATION_FALLBACK_LIMIT),
+                    summary: '登录后可启用云端智能精排，当前已按本地候选与热门信号为你生成推荐。',
+                    source: fallbackRecommendations.length ? 'fallback_candidates' : 'fallback_popular',
+                    traceId: '',
+                    profileHash
+                };
+                saveServedRecommendationCache(privateFallbackPayload, RECOMMENDATION_FALLBACK_TTL_MS);
+                updateMeta({
+                    dirty: false,
+                    dirtyReasons: [],
+                    lastSuccessfulRefreshAt: new Date().toISOString(),
+                    lastServedSource: privateFallbackPayload.source,
+                    lastProfileHash: profileHash
+                });
+                applyIfLatest(() => applyRecommendationPayload(privateFallbackPayload, { allowDirtyHint: false }));
+                return {
+                    ok: true,
+                    source: privateFallbackPayload.source,
+                    recommendations: privateFallbackPayload.recommendations,
+                    authRequired: true
+                };
+            }
+
+            try {
+                const apiRawResult = await fetchLLMRecommendations(profile, candidates, {
+                    reason,
+                    force,
+                    cacheScopeKey: getRecommendationCacheScopeKey(),
+                    profileHash,
+                    accessToken,
+                    signal: controller?.signal
+                });
+                const normalizedResult = normalizeRecommendationApiResult(apiRawResult, candidates);
+                const normalizedItems = normalizedResult.ok ? normalizedResult.items.slice(0, RECOMMENDATION_FALLBACK_LIMIT) : [];
+                if (!normalizedItems.length) {
+                    throw new Error(normalizedResult.meta?.message || 'Recommendation API returned no valid items');
+                }
+
+                let frontendRecommendations = mapRecommendationItemsToFrontend(normalizedItems);
+                if (frontendRecommendations.length < RECOMMENDATION_FALLBACK_LIMIT) {
+                    const fallbackRecommendations = buildFallbackFromCandidates(candidates, RECOMMENDATION_FALLBACK_LIMIT)
+                        .filter(rec => !frontendRecommendations.some(existing => String(existing.bookId) === String(rec.bookId)));
+                    frontendRecommendations = frontendRecommendations.concat(
+                        fallbackRecommendations.slice(0, RECOMMENDATION_FALLBACK_LIMIT - frontendRecommendations.length)
+                    ).map((item, index) => ({
+                        ...item,
+                        id: index + 1
+                    }));
+                }
+
+                const summarySource = normalizedResult.source || 'llm';
+                const isFallbackSource = summarySource === 'fallback';
+                const responsePayload = {
+                    recommendations: frontendRecommendations.slice(0, RECOMMENDATION_FALLBACK_LIMIT),
+                    summary: summarySource === 'llm'
+                        ? (normalizedResult.profileSummary || `基于你最近的兴趣画像，已从 ${candidates.length} 本候选中完成智能精排。`)
+                        : '服务端已切换为候选兜底排序，推荐区已稳定恢复。',
+                    source: summarySource,
+                    traceId: normalizedResult.meta?.traceId || '',
+                    profileHash
+                };
+
+                saveServedRecommendationCache(responsePayload, isFallbackSource ? RECOMMENDATION_FALLBACK_TTL_MS : RECOMMENDATION_SERVED_TTL_MS);
+                if (!isFallbackSource) {
+                    saveProfileRecommendationCache(profileCacheKey, responsePayload);
+                }
+
+                updateMeta({
+                    dirty: isFallbackSource ? true : false,
+                    dirtyReasons: isFallbackSource ? recommendationMetaState.dirtyReasons : [],
+                    lastSuccessfulRefreshAt: isFallbackSource ? recommendationMetaState.lastSuccessfulRefreshAt : new Date().toISOString(),
+                    lastServedSource: responsePayload.source,
+                    lastProfileHash: profileHash
+                });
+                applyIfLatest(() => applyRecommendationPayload(responsePayload, { allowDirtyHint: isFallbackSource }));
+                return {
+                    ok: true,
+                    source: responsePayload.source,
+                    traceId: responsePayload.traceId,
+                    recommendations: responsePayload.recommendations,
+                    meta: normalizedResult.meta
+                };
+            } catch (error) {
+                if (error?.name === 'AbortError') {
+                    throw error;
+                }
+
+                console.warn('Homepage recommendation refresh fallback:', error);
+                const fallbackRecommendations = buildFallbackFromCandidates(candidates, RECOMMENDATION_FALLBACK_LIMIT);
+                const fallbackPayload = {
+                    recommendations: fallbackRecommendations.length ? fallbackRecommendations : buildPopularFallbackRecommendations(RECOMMENDATION_FALLBACK_LIMIT),
+                    summary: fallbackRecommendations.length
+                        ? '智能排序暂时不可用，已按本地候选粗排为你稳定补齐推荐。'
+                        : '推荐服务暂不可用，已按热门与评分为你恢复首页推荐。',
+                    source: fallbackRecommendations.length ? 'fallback_candidates' : 'fallback_popular',
+                    traceId: '',
+                    profileHash
+                };
+                saveServedRecommendationCache(fallbackPayload, RECOMMENDATION_FALLBACK_TTL_MS);
+                updateMeta({
+                    dirty: true,
+                    dirtyReasons: recommendationMetaState.dirtyReasons,
+                    lastServedSource: fallbackPayload.source,
+                    lastProfileHash: profileHash
+                });
+                applyIfLatest(() => applyRecommendationPayload(fallbackPayload, { allowDirtyHint: true }));
+                return {
+                    ok: false,
+                    source: fallbackPayload.source,
+                    recommendations: fallbackPayload.recommendations,
+                    error
+                };
+            }
+        } catch (error) {
+            if (error?.name === 'AbortError') {
+                return {
+                    ok: false,
+                    source: 'aborted',
+                    recommendations: normalizeFrontendRecommendationEntries(recommendations),
+                    aborted: true
+                };
+            }
+            console.error('Refresh homepage recommendations failed:', error);
+            const fallbackPayload = {
+                recommendations: buildPopularFallbackRecommendations(RECOMMENDATION_FALLBACK_LIMIT),
+                summary: '推荐服务暂不可用，已按热门与评分为你恢复首页推荐。',
+                source: 'fallback_popular',
+                traceId: ''
+            };
+            saveServedRecommendationCache(fallbackPayload, RECOMMENDATION_FALLBACK_TTL_MS);
+            updateMeta({
+                dirty: true,
+                dirtyReasons: recommendationMetaState.dirtyReasons,
+                lastServedSource: fallbackPayload.source
+            });
+            applyIfLatest(() => applyRecommendationPayload(fallbackPayload, { allowDirtyHint: true }));
+            return {
+                ok: false,
+                source: 'fallback_popular',
+                recommendations: fallbackPayload.recommendations,
+                error
+            };
+        } finally {
+            if (recommendationAbortController === controller) {
+                recommendationAbortController = null;
+            }
+        }
+    }
+
+    function requestRecommendationRefresh(options = {}) {
+        const requestOptions = {
+            force: Boolean(options?.force),
+            reason: String(options?.reason || 'manual').trim() || 'manual',
+            source: String(options?.source || 'soft').trim() || 'soft'
+        };
+        const decision = shouldRefreshRecommendations(requestOptions);
+
+        if (!requestOptions.force && recommendationRefreshPromise) {
+            return recommendationRefreshPromise;
+        }
+
+        if (!requestOptions.force && decision.shouldUseServedCache && decision.servedPayload?.recommendations?.length) {
+            applyRecommendationPayload(decision.servedPayload, {
+                allowDirtyHint: true,
+                servedCacheContinuation: true
+            });
+            if (!decision.shouldRequest) {
+                return Promise.resolve({
+                    ok: true,
+                    source: decision.servedPayload.source || 'served_cache',
+                    recommendations: decision.servedPayload.recommendations,
+                    cache: 'served'
+                });
+            }
+            if (decision.throttled) {
+                return Promise.resolve({
+                    ok: true,
+                    source: decision.servedPayload.source || 'served_cache',
+                    recommendations: decision.servedPayload.recommendations,
+                    cache: 'served_stale'
+                });
+            }
+        }
+
+        if (requestOptions.force && recommendationAbortController) {
+            recommendationAbortController.abort(new DOMException('Superseded by a forced refresh', 'AbortError'));
+        }
+
+        const refreshPromise = executeRecommendationRefresh(requestOptions).finally(() => {
+            if (recommendationRefreshPromise === refreshPromise) {
+                recommendationRefreshPromise = null;
+            }
+        });
+        recommendationRefreshPromise = refreshPromise;
+        return refreshPromise;
+    }
+
+    async function refreshHomepageRecommendations({ force = false, reason = 'init', source = 'soft' } = {}) {
+        return requestRecommendationRefresh({ force, reason, source });
+    }
+
+    async function bootstrapHomepageRecommendations() {
+        recommendationMetaState = loadRecommendationMetaState();
+        const servedPayload = loadServedRecommendationCache();
+        if (servedPayload?.recommendations?.length) {
+            applyRecommendationPayload(servedPayload, {
+                allowDirtyHint: true,
+                servedCacheContinuation: true
+            });
+            const servedExpired = isRecommendationPayloadExpired(servedPayload);
+            if (!servedExpired && !recommendationMetaState?.dirty) {
+                return {
+                    ok: true,
+                    source: servedPayload.source || 'served_cache',
+                    recommendations: servedPayload.recommendations,
+                    cache: 'served'
+                };
+            }
+
+            requestRecommendationRefresh({ force: false, reason: 'init', source: 'bootstrap' }).catch(error => {
+                console.warn('Bootstrap recommendation refresh failed:', error);
+            });
+            return {
+                ok: true,
+                source: servedPayload.source || 'served_cache',
+                recommendations: servedPayload.recommendations,
+                cache: servedExpired ? 'served_stale' : 'served'
+            };
+        }
+
+        return requestRecommendationRefresh({ force: false, reason: 'init', source: 'bootstrap' });
+    }
+
+    function scheduleRecommendationRefresh(reason) {
+        if (recommendationRefreshTimer) {
+            window.clearTimeout(recommendationRefreshTimer);
+        }
+        const servedPayload = loadServedRecommendationCache();
+        const servedExpired = isRecommendationPayloadExpired(servedPayload);
+        const baseDelay = Math.max(250, Number(RECOMMENDATION_REFRESH_DEBOUNCE_MS) || 2500);
+        const remainingServedMs = servedPayload?.expiresAt ? Math.max(0, Number(servedPayload.expiresAt) - Date.now()) : 0;
+        const nextDelay = servedPayload?.recommendations?.length && !servedExpired
+            ? Math.max(baseDelay, remainingServedMs + 50)
+            : baseDelay;
+        recommendationRefreshTimer = window.setTimeout(() => {
+            recommendationRefreshTimer = null;
+            requestRecommendationRefresh({ force: false, reason, source: 'soft' });
+        }, nextDelay);
+    }
     
     // 初始化页面
     async function initPage() {
@@ -1596,7 +3175,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         syncCartWithVisibleBooks();
         syncHistoryWithVisibleBooks();
         renderBooks(books);
-        renderRecommendations();
         renderFavoritesSidebar();
         renderOrdersSidebar();
         renderHistorySidebar();
@@ -1604,6 +3182,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         renderCart();
         updateCartCount();
         calculateTotal();
+        recommendationMetaState = loadRecommendationMetaState();
+        await bootstrapHomepageRecommendations();
 
         // 添加事件监听器
         setupEventListeners();
@@ -1818,7 +3398,14 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 渲染推荐图书
     function renderRecommendations() {
+        if (!recommendationsGrid) return;
+        renderRecommendationSummaryState();
         recommendationsGrid.innerHTML = '';
+
+        if (!Array.isArray(recommendations) || !recommendations.length) {
+            recommendationsGrid.innerHTML = '<div class="no-results"><p>暂无可推荐图书</p></div>';
+            return;
+        }
         
         recommendations.forEach(rec => {
             const book = findBookById(rec.bookId);
@@ -1830,11 +3417,11 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             recommendationCard.innerHTML = `
                 <div class="recommendation-badge">AI推荐</div>
-                <p class="recommendation-reason"><i class="fas fa-lightbulb"></i> ${rec.reason}</p>
-                <div class="book-category">${getCategoryName(book.category)}</div>
-                <h3 class="book-title">${book.title}</h3>
-                <p class="book-author">${book.author}</p>
-                <p class="book-description">${book.description}</p>
+                <p class="recommendation-reason"><i class="fas fa-lightbulb"></i> ${escapeHtml(rec.reason)}</p>
+                <div class="book-category">${escapeHtml(getCategoryName(book.category))}</div>
+                <h3 class="book-title">${escapeHtml(book.title)}</h3>
+                <p class="book-author">${escapeHtml(book.author)}</p>
+                <p class="book-description">${escapeHtml(book.description)}</p>
                 <div class="book-footer">
                     <div class="book-price">¥ ${book.price.toFixed(2)}</div>
                     <div class="book-rating">
@@ -1852,6 +3439,11 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             recommendationsGrid.appendChild(recommendationCard);
         });
+
+        if (!recommendationsGrid.children.length) {
+            recommendationsGrid.innerHTML = '<div class="no-results"><p>暂无可推荐图书</p></div>';
+            return;
+        }
         
         // 为推荐区域添加到购物车按钮添加事件监听器（游客会被阻止并提示登录）
         document.querySelectorAll('.recommendation-card .add-to-cart').forEach(btn => {
@@ -2658,9 +4250,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         historyItemsContainer.querySelectorAll('.remove-history').forEach(button => {
             button.addEventListener('click', function() {
                 const bookId = Number(this.dataset.id);
+                const previousLength = browsingHistory.length;
                 browsingHistory = browsingHistory.filter(item => Number(item.id) !== bookId);
                 persistHistory();
                 renderHistorySidebar();
+                if (browsingHistory.length !== previousLength) {
+                    markRecommendationDirty('history_update');
+                }
             });
         });
     }
@@ -2738,19 +4334,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
         
         // 刷新推荐
-        if (refreshRecommendationsBtn) refreshRecommendationsBtn.addEventListener('click', function() {
+        if (refreshRecommendationsBtn) refreshRecommendationsBtn.addEventListener('click', async function() {
             this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中...';
             this.disabled = true;
-            
-            // 模拟API请求延迟
-            setTimeout(() => {
-                // 在实际应用中，这里会从服务器获取新的推荐
+
+            try {
+                const result = await requestRecommendationRefresh({ force: true, reason: 'manual_refresh', source: 'manual' });
+                const feedback = getRecommendationRefreshToast(result);
+                showNotification(feedback.message, feedback.type);
+            } finally {
                 this.innerHTML = '<i class="fas fa-sync-alt"></i> 刷新推荐';
                 this.disabled = false;
-                
-                // 显示成功消息
-                showNotification('推荐已更新', 'success');
-            }, 1500);
+            }
         });
         
         // 购物车功能
@@ -2868,6 +4463,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 browsingHistory = [];
                 persistHistory();
                 renderHistorySidebar();
+                markRecommendationDirty('history_clear');
                 showNotification('浏览历史已清空', 'info');
             });
         }
