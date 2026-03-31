@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     const HISTORY_STORAGE_PREFIX = 'bookstore_history_v1';
     const BOOKS_CACHE_KEY = 'bookstore_books_cache_v2';
     const ORDER_AUTO_RECEIVE_MS = 7 * 24 * 60 * 60 * 1000;
+    const RECOMMENDATION_REFRESH_MS = 10 * 60 * 1000;
     const ORDER_STATUS_LABELS = {
         pending: '待处理',
         hold: '暂缓',
@@ -34,6 +35,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     let currentUserId = null;
     let currentOrderFilter = 'all';
     let browsingHistory = [];
+    let recommendationRefreshTimer = null;
+    let recommendationLastUpdatedAt = 0;
+    let recommendationBatchSignature = '';
+    let recommendationRotationOffset = 0;
+    let recommendationFirstBatch = [];
     let detailGalleryAutoplayTimer = null;
     const DETAIL_GALLERY_INTERVAL_MS = 2000;
     const REVIEW_MEDIA_MAX_FILES = 4;
@@ -1233,6 +1239,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         browsingHistory = browsingHistory.slice(0, 30);
         persistHistory();
         renderHistorySidebar();
+        refreshRecommendationsByBehavior({ silent: true });
     }
 
     async function getCurrentSupabaseUserId() {
@@ -1408,6 +1415,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 favoriteBookIds.add(key);
                 syncFavoriteButtonsForBook(bookId);
                 renderFavoritesSidebar();
+                refreshRecommendationsByBehavior({ silent: true });
                 showNotification(`已收藏《${(targetBook?.title || '该图书').substring(0, 18)}》`, 'success');
             } else {
                 const { error } = await supabaseClient
@@ -1419,6 +1427,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 favoriteBookIds.delete(key);
                 syncFavoriteButtonsForBook(bookId);
                 renderFavoritesSidebar();
+                refreshRecommendationsByBehavior({ silent: true });
                 showNotification(`已取消收藏《${(targetBook?.title || '该图书').substring(0, 18)}》`, 'info');
             }
         } catch (e) {
@@ -1500,6 +1509,370 @@ document.addEventListener('DOMContentLoaded', async function() {
         } catch (e) {
             console.error('Unexpected error loading from Supabase:', e);
         }
+    }
+
+    function getRecommendationBehaviorSnapshot() {
+        const historyIds = browsingHistory
+            .map(item => Number(item?.id))
+            .filter(id => Number.isFinite(id));
+        const favoriteIds = Array.from(favoriteBookIds)
+            .map(id => Number(id))
+            .filter(id => Number.isFinite(id));
+        const cartEntries = cart
+            .map(item => ({
+                bookId: Number(item?.bookId),
+                quantity: Math.max(1, Number(item?.quantity) || 1)
+            }))
+            .filter(item => Number.isFinite(item.bookId));
+        return { historyIds, favoriteIds, cartEntries };
+    }
+
+    function buildRecommendationProfile() {
+        const snapshot = getRecommendationBehaviorSnapshot();
+        const categoryWeights = new Map();
+        const authorWeights = new Map();
+        const tagWeights = new Map();
+        let weightedPriceTotal = 0;
+        let weightedPriceCount = 0;
+
+        const applyWeightsFromBook = (book, weight) => {
+            if (!book || !Number.isFinite(weight) || weight <= 0) return;
+
+            const categoryKey = String(book.category || 'all').trim();
+            if (categoryKey) {
+                categoryWeights.set(categoryKey, (categoryWeights.get(categoryKey) || 0) + weight);
+            }
+
+            const authorKey = String(book.author || '').trim();
+            if (authorKey) {
+                authorWeights.set(authorKey, (authorWeights.get(authorKey) || 0) + weight);
+            }
+
+            normalizeTextList(book.tags).forEach(tag => {
+                const tagKey = String(tag || '').trim();
+                if (!tagKey) return;
+                tagWeights.set(tagKey, (tagWeights.get(tagKey) || 0) + weight);
+            });
+
+            const price = Number(book.price || 0);
+            if (Number.isFinite(price) && price > 0) {
+                weightedPriceTotal += price * weight;
+                weightedPriceCount += weight;
+            }
+        };
+
+        snapshot.historyIds.forEach((bookId, index) => {
+            const book = findBookById(bookId);
+            const weight = Math.max(1.5, 5 - index * 0.35);
+            applyWeightsFromBook(book, weight);
+        });
+
+        snapshot.favoriteIds.forEach(bookId => {
+            const book = findBookById(bookId);
+            applyWeightsFromBook(book, 6);
+        });
+
+        snapshot.cartEntries.forEach(entry => {
+            const book = findBookById(entry.bookId);
+            const quantityWeight = Math.min(3, entry.quantity);
+            applyWeightsFromBook(book, 7 + quantityWeight);
+        });
+
+        const preferredPrice = weightedPriceCount > 0 ? (weightedPriceTotal / weightedPriceCount) : 0;
+        const excludedIds = new Set([
+            ...snapshot.historyIds,
+            ...snapshot.favoriteIds,
+            ...snapshot.cartEntries.map(item => item.bookId)
+        ].map(id => String(id)));
+
+        return {
+            categoryWeights,
+            authorWeights,
+            tagWeights,
+            preferredPrice,
+            excludedIds,
+            hasBehavior: snapshot.historyIds.length > 0 || snapshot.favoriteIds.length > 0 || snapshot.cartEntries.length > 0,
+            historyCount: snapshot.historyIds.length,
+            favoriteCount: snapshot.favoriteIds.length,
+            cartCount: snapshot.cartEntries.length
+        };
+    }
+
+    function createRecommendationReason(parts, fallback) {
+        const normalizedParts = parts.filter(Boolean);
+        if (!normalizedParts.length) return fallback;
+        return `与您${normalizedParts.join('、')}偏好相关`;
+    }
+
+    function buildPersonalizedRecommendations(limit = 4) {
+        const visibleBooks = getVisibleBooks(books);
+        if (!visibleBooks.length) return [];
+
+        const profile = buildRecommendationProfile();
+        if (!profile.hasBehavior) {
+            return visibleBooks
+                .slice()
+                .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0) || Number(a.price || 0) - Number(b.price || 0))
+                .slice(0, limit)
+                .map((book, index) => ({
+                    id: index + 1,
+                    bookId: book.id,
+                    reason: '基于热门评分为您推荐'
+                }));
+        }
+
+        const scored = visibleBooks
+            .filter(book => !profile.excludedIds.has(String(book.id)))
+            .map(book => {
+                const scoreDetails = {
+                    category: 0,
+                    author: 0,
+                    tags: 0,
+                    price: 0,
+                    rating: Number(book.rating || 0) * 0.8
+                };
+
+                const categoryKey = String(book.category || 'all').trim();
+                scoreDetails.category = Number(profile.categoryWeights.get(categoryKey) || 0) * 1.35;
+
+                const authorKey = String(book.author || '').trim();
+                scoreDetails.author = Number(profile.authorWeights.get(authorKey) || 0) * 1.55;
+
+                const tags = normalizeTextList(book.tags);
+                scoreDetails.tags = tags.reduce((sum, tag) => sum + Number(profile.tagWeights.get(String(tag).trim()) || 0), 0) * 1.1;
+
+                if (profile.preferredPrice > 0 && Number.isFinite(Number(book.price))) {
+                    const priceGap = Math.abs(Number(book.price) - profile.preferredPrice);
+                    const ratio = priceGap / Math.max(profile.preferredPrice, 1);
+                    scoreDetails.price = Math.max(0, 4.2 - ratio * 5.2);
+                }
+
+                const score = scoreDetails.category + scoreDetails.author + scoreDetails.tags + scoreDetails.price + scoreDetails.rating;
+
+                const reasonParts = [];
+                if (scoreDetails.author >= 4) reasonParts.push('作者');
+                if (scoreDetails.category >= 4) reasonParts.push('题材');
+                if (scoreDetails.tags >= 4) reasonParts.push('关键词');
+                if (scoreDetails.price >= 2.6) reasonParts.push('价格区间');
+
+                return {
+                    book,
+                    score,
+                    reason: createRecommendationReason(reasonParts, '与您的阅读偏好相关')
+                };
+            })
+            .filter(item => item.score > 0)
+            .sort((a, b) => b.score - a.score || Number(b.book.rating || 0) - Number(a.book.rating || 0));
+
+        const picked = scored.length
+            ? scored.slice(0, limit)
+            : visibleBooks
+                .slice()
+                .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0))
+                .slice(0, limit)
+                .map(book => ({ book, reason: '基于图书质量为您推荐' }));
+
+        return picked.map((item, index) => ({
+            id: index + 1,
+            bookId: item.book.id,
+            reason: item.reason
+        }));
+    }
+
+    function getRecommendationCandidatePool(limit = 4) {
+        const visibleBooks = getVisibleBooks(books);
+        const snapshot = getRecommendationBehaviorSnapshot();
+        const profile = buildRecommendationProfile();
+        const behaviorSignature = [
+            snapshot.historyIds.join(','),
+            snapshot.favoriteIds.join(','),
+            snapshot.cartEntries.map(item => `${item.bookId}:${item.quantity}`).join(',')
+        ].join('|');
+
+        if (!visibleBooks.length) {
+            return {
+                signature: `empty|${behaviorSignature}`,
+                hasMatches: false,
+                candidates: []
+            };
+        }
+
+        if (!profile.hasBehavior) {
+            const fallbackCandidates = visibleBooks
+                .slice()
+                .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0) || Number(a.price || 0) - Number(b.price || 0))
+                .map(book => ({
+                    bookId: book.id,
+                    reason: '基于热门评分为您推荐'
+                }));
+
+            return {
+                signature: `fallback|${behaviorSignature}|${fallbackCandidates.map(item => item.bookId).join(',')}`,
+                hasMatches: false,
+                candidates: fallbackCandidates.slice(0, Math.max(limit, fallbackCandidates.length))
+            };
+        }
+
+        const scored = visibleBooks
+            .filter(book => !profile.excludedIds.has(String(book.id)))
+            .map(book => {
+                const scoreDetails = {
+                    category: 0,
+                    author: 0,
+                    tags: 0,
+                    price: 0,
+                    rating: Number(book.rating || 0) * 0.8
+                };
+
+                const categoryKey = String(book.category || 'all').trim();
+                scoreDetails.category = Number(profile.categoryWeights.get(categoryKey) || 0) * 1.35;
+
+                const authorKey = String(book.author || '').trim();
+                scoreDetails.author = Number(profile.authorWeights.get(authorKey) || 0) * 1.55;
+
+                const tags = normalizeTextList(book.tags);
+                scoreDetails.tags = tags.reduce((sum, tag) => sum + Number(profile.tagWeights.get(String(tag).trim()) || 0), 0) * 1.1;
+
+                if (profile.preferredPrice > 0 && Number.isFinite(Number(book.price))) {
+                    const priceGap = Math.abs(Number(book.price) - profile.preferredPrice);
+                    const ratio = priceGap / Math.max(profile.preferredPrice, 1);
+                    scoreDetails.price = Math.max(0, 4.2 - ratio * 5.2);
+                }
+
+                const score = scoreDetails.category + scoreDetails.author + scoreDetails.tags + scoreDetails.price + scoreDetails.rating;
+
+                const reasonParts = [];
+                if (scoreDetails.author >= 4) reasonParts.push('作者');
+                if (scoreDetails.category >= 4) reasonParts.push('题材');
+                if (scoreDetails.tags >= 4) reasonParts.push('关键词');
+                if (scoreDetails.price >= 2.6) reasonParts.push('价格区间');
+
+                return {
+                    bookId: book.id,
+                    score,
+                    reason: createRecommendationReason(reasonParts, '与您的阅读偏好相关')
+                };
+            })
+            .filter(item => item.score > 0)
+            .sort((a, b) => b.score - a.score || Number(findBookById(b.bookId)?.rating || 0) - Number(findBookById(a.bookId)?.rating || 0));
+
+        if (!scored.length) {
+            const fallbackCandidates = buildPersonalizedRecommendations(limit);
+            return {
+                signature: `no-match|${behaviorSignature}|${fallbackCandidates.map(item => item.bookId).join(',')}`,
+                hasMatches: false,
+                candidates: fallbackCandidates
+            };
+        }
+
+        return {
+            signature: `matched|${behaviorSignature}|${scored.map(item => item.bookId).join(',')}`,
+            hasMatches: true,
+            candidates: scored.map(item => ({
+                bookId: item.bookId,
+                reason: item.reason
+            }))
+        };
+    }
+
+    function pickRecommendationBatch(candidates, offset, limit = 4) {
+        if (!Array.isArray(candidates) || !candidates.length || limit <= 0) return [];
+        const size = candidates.length;
+        const start = ((offset % size) + size) % size;
+        const picked = [];
+        const usedIds = new Set();
+
+        for (let i = 0; i < size && picked.length < limit; i += 1) {
+            const item = candidates[(start + i) % size];
+            if (!item) continue;
+            if (usedIds.has(String(item.bookId))) continue;
+            picked.push(item);
+            usedIds.add(String(item.bookId));
+        }
+
+        return picked.map((item, index) => ({
+            id: index + 1,
+            bookId: item.bookId,
+            reason: item.reason
+        }));
+    }
+
+    function updateRecommendationRefreshTip() {
+        const tip = document.querySelector('.recommendation-refresh p');
+        if (!tip) return;
+        if (!recommendationLastUpdatedAt) {
+            tip.textContent = '推荐每10分钟自动更新一次，也可以手动刷新';
+            return;
+        }
+        const timeText = new Date(recommendationLastUpdatedAt).toLocaleTimeString('zh-CN', {
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        tip.textContent = `推荐每10分钟自动更新一次，也可以手动刷新（最近更新：${timeText}）`;
+    }
+
+    function refreshRecommendationsByBehavior(options = {}) {
+        const {
+            silent = true,
+            message = '推荐已更新',
+            lockButton = false,
+            rotateBatch = false
+        } = options;
+
+        if (lockButton && refreshRecommendationsBtn) {
+            refreshRecommendationsBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中...';
+            refreshRecommendationsBtn.disabled = true;
+        }
+
+        const pool = getRecommendationCandidatePool(4);
+        const signatureChanged = pool.signature !== recommendationBatchSignature;
+
+        if (signatureChanged) {
+            recommendationBatchSignature = pool.signature;
+            recommendationRotationOffset = 0;
+            recommendationFirstBatch = pickRecommendationBatch(pool.candidates, 0, 4);
+        }
+
+        const canRotate = pool.hasMatches && Array.isArray(pool.candidates) && pool.candidates.length > 4;
+        if (!canRotate) {
+            recommendationRotationOffset = 0;
+            recommendations = recommendationFirstBatch.slice();
+        } else if (rotateBatch) {
+            recommendationRotationOffset = signatureChanged
+                ? 0
+                : (recommendationRotationOffset + 4) % pool.candidates.length;
+            recommendations = pickRecommendationBatch(pool.candidates, recommendationRotationOffset, 4);
+        } else {
+            recommendations = recommendationFirstBatch.slice();
+        }
+
+        if (!recommendations.length) {
+            recommendations = buildPersonalizedRecommendations(4);
+            recommendationFirstBatch = recommendations.slice();
+        }
+
+        recommendationLastUpdatedAt = Date.now();
+        renderRecommendations();
+        updateRecommendationRefreshTip();
+
+        if (lockButton && refreshRecommendationsBtn) {
+            refreshRecommendationsBtn.innerHTML = '<i class="fas fa-sync-alt"></i> 刷新推荐';
+            refreshRecommendationsBtn.disabled = false;
+        }
+
+        if (!silent) {
+            showNotification(message, 'success');
+        }
+    }
+
+    function startRecommendationAutoRefresh() {
+        if (recommendationRefreshTimer) {
+            clearInterval(recommendationRefreshTimer);
+        }
+        recommendationRefreshTimer = setInterval(() => {
+            refreshRecommendationsByBehavior({ silent: true, rotateBatch: true });
+        }, RECOMMENDATION_REFRESH_MS);
     }
     
     // DOM元素
@@ -1596,7 +1969,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         syncCartWithVisibleBooks();
         syncHistoryWithVisibleBooks();
         renderBooks(books);
-        renderRecommendations();
+        refreshRecommendationsByBehavior({ silent: true });
+        startRecommendationAutoRefresh();
         renderFavoritesSidebar();
         renderOrdersSidebar();
         renderHistorySidebar();
@@ -2520,7 +2894,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 await loadBookReviewsFromSupabase();
                 await loadSystemMessagesFromSupabase();
                 renderBooks(books);
-                renderRecommendations();
+                refreshRecommendationsByBehavior({ silent: true });
                 renderOrdersSidebar();
                 renderSystemMessagesSidebar();
                 openOrderDetail(orderId, { focusReview: true });
@@ -2739,18 +3113,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         // 刷新推荐
         if (refreshRecommendationsBtn) refreshRecommendationsBtn.addEventListener('click', function() {
-            this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中...';
-            this.disabled = true;
-            
-            // 模拟API请求延迟
-            setTimeout(() => {
-                // 在实际应用中，这里会从服务器获取新的推荐
-                this.innerHTML = '<i class="fas fa-sync-alt"></i> 刷新推荐';
-                this.disabled = false;
-                
-                // 显示成功消息
-                showNotification('推荐已更新', 'success');
-            }, 1500);
+            refreshRecommendationsByBehavior({
+                silent: false,
+                message: '推荐已按当前浏览、收藏和加购偏好更新',
+                lockButton: true,
+                rotateBatch: true
+            });
         });
         
         // 购物车功能
@@ -2789,6 +3157,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 renderCart();
                 updateCartCount();
                 calculateTotal();
+                refreshRecommendationsByBehavior({ silent: true });
                 showNotification('购物车已清空', 'info');
             }
         });
@@ -2868,6 +3237,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 browsingHistory = [];
                 persistHistory();
                 renderHistorySidebar();
+                refreshRecommendationsByBehavior({ silent: true });
                 showNotification('浏览历史已清空', 'info');
             });
         }
@@ -3311,6 +3681,7 @@ if (checkoutBtn) {
         renderCart();
         updateCartCount();
         calculateTotal();
+        refreshRecommendationsByBehavior({ silent: true });
         showNotification(`"${book.title.substring(0, 15)}..." 已添加到购物车`, 'success');
         
         // 自动打开购物车
@@ -3338,6 +3709,7 @@ if (checkoutBtn) {
         renderCart();
         calculateTotal();
         updateCartCount();
+        refreshRecommendationsByBehavior({ silent: true });
     }
     
     // 从购物车移除商品
@@ -3356,6 +3728,7 @@ if (checkoutBtn) {
         renderCart();
         calculateTotal();
         updateCartCount();
+        refreshRecommendationsByBehavior({ silent: true });
         
         if (book) {
             showNotification(`"${book.title.substring(0, 15)}..." 已从购物车移除`, 'info');
@@ -5636,29 +6009,6 @@ if (checkoutBtn) {
 
             .book-detail-title {
                 font-size: 26px;
-            }
-
-            .related-books-grid {
-                grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-                gap: 12px;
-            }
-
-            .related-book-card {
-                grid-template-rows: 132px 1fr;
-            }
-
-            .related-book-footer {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .related-book-actions {
-                justify-content: space-between;
-            }
-
-            .related-book-add-cart {
-                flex: 1;
-                text-align: center;
             }
         }
     `;
