@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     const CHECKOUT_PAYLOAD_KEY = 'bookstore_checkout_payload_v1';
     const CART_STORAGE_PREFIX = 'bookstore_cart_v1';
     const HISTORY_STORAGE_PREFIX = 'bookstore_history_v1';
+    const SYSTEM_MESSAGE_READ_STORAGE_PREFIX = 'bookstore_system_message_read_v1';
     const BOOKS_CACHE_KEY = 'bookstore_books_cache_v2';
     const ORDER_AUTO_RECEIVE_MS = 7 * 24 * 60 * 60 * 1000;
     const RECOMMENDATION_REFRESH_MS = 10 * 60 * 1000;
@@ -688,13 +689,25 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
 
             const userKey = String(currentUserId || '').trim();
+            const locallyReadIds = loadSystemMessageReadIds();
             systemMessages = (Array.isArray(data) ? data : [])
                 .map((row, index) => normalizeSystemMessage(row, index))
                 .filter(message => {
                     const targetUserId = String(message?.userId || '').trim();
                     if (!targetUserId) return true;
                     return userKey && targetUserId === userKey;
+                })
+                .map(message => {
+                    const messageId = String(message?.id || '').trim();
+                    if (message.isRead && messageId) {
+                        locallyReadIds.add(messageId);
+                    }
+                    return {
+                        ...message,
+                        isRead: Boolean(message.isRead || (messageId && locallyReadIds.has(messageId)))
+                    };
                 });
+            persistSystemMessageReadIds(locallyReadIds);
             updateSystemMessagesUnreadBadge();
         } catch (e) {
             console.warn('Unexpected load system messages error:', e);
@@ -715,18 +728,70 @@ document.addEventListener('DOMContentLoaded', async function() {
         systemMessagesUnreadBadge.hidden = unreadCount <= 0;
     }
 
-    async function markSystemMessageRead(messageId) {
-        if (!supabaseClient) return;
+    function getSystemMessageReadStorageKey() {
+        const userType = sessionStorage.getItem('userType') || 'anon';
+        const loginUsername = String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim().toLowerCase();
+        const identity = String(currentUserId || '').trim() || loginUsername || 'visitor';
+        return `${SYSTEM_MESSAGE_READ_STORAGE_PREFIX}_${userType}_${identity}`;
+    }
+
+    function loadSystemMessageReadIds() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(getSystemMessageReadStorageKey()) || '[]');
+            if (!Array.isArray(parsed)) return new Set();
+            return new Set(parsed.map(item => String(item || '').trim()).filter(Boolean));
+        } catch {
+            return new Set();
+        }
+    }
+
+    function persistSystemMessageReadIds(readIds) {
+        try {
+            const normalized = Array.from(readIds instanceof Set ? readIds : new Set(readIds || []))
+                .map(item => String(item || '').trim())
+                .filter(Boolean)
+                .slice(-500);
+            localStorage.setItem(getSystemMessageReadStorageKey(), JSON.stringify(normalized));
+        } catch (e) {
+            console.warn('Persist system message read ids failed:', e);
+        }
+    }
+
+    function rememberSystemMessageRead(messageId) {
         const targetId = String(messageId || '').trim();
         if (!targetId) return;
+        const readIds = loadSystemMessageReadIds();
+        readIds.add(targetId);
+        persistSystemMessageReadIds(readIds);
+    }
+
+    async function markSystemMessageRead(messageId) {
+        const targetId = String(messageId || '').trim();
+        if (!targetId) return { ok: false };
+
+        rememberSystemMessageRead(targetId);
+
+        const targetMessage = (Array.isArray(systemMessages) ? systemMessages : []).find(item => String(item?.id || '').trim() === targetId);
+        const targetUserId = String(targetMessage?.userId || '').trim();
+        const canSyncToCloud = Boolean(supabaseClient && targetUserId && String(currentUserId || '').trim() === targetUserId);
+
+        if (!canSyncToCloud) {
+            return { ok: true, synced: false };
+        }
 
         try {
-            await supabaseClient
+            const { error } = await supabaseClient
                 .from('system_messages')
                 .update({ is_read: true })
                 .eq('id', targetId);
+            if (error) {
+                console.warn('Mark system message as read failed:', error);
+                return { ok: true, synced: false };
+            }
+            return { ok: true, synced: true };
         } catch (e) {
             console.warn('Mark system message as read failed:', e);
+            return { ok: true, synced: false };
         }
     }
 
@@ -2563,6 +2628,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 ? `<ul style="margin:8px 0 0 18px;padding:0;">${order.items.map(product => `<li>${escapeHtml(product.title || '图书')} × ${Number(product.quantity || 0)}</li>`).join('')}</ul>`
                 : '<div style="margin-top:8px;color:var(--text-light);">该订单未记录商品明细</div>';
             const canReceive = normalizeOrderStatus(order.status) === 'arrived';
+            const isCancelled = normalizeOrderStatus(order.status) === 'cancelled';
             const remainingText = getOrderRemainingText(order);
             const pendingReviewCount = getOrderPendingReviewCount(order);
             const canReviewNow = normalizeOrderStatus(order.status) === 'received' && pendingReviewCount > 0;
@@ -2578,6 +2644,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         <div>发货时间：${escapeHtml(formatOrderDate(order.shipmentDate))}</div>
                         <div>到货时间：${escapeHtml(formatOrderDate(order.arrivedDate))}</div>
                         <div>收货时间：${escapeHtml(formatOrderDate(order.receivedDate))}</div>
+                        ${isCancelled && order.cancelDate ? `<div>取消时间：${escapeHtml(formatOrderDate(order.cancelDate))}</div>` : ''}
                         ${remainingText ? `<div style="color:#8b5e3c;">${escapeHtml(remainingText)}</div>` : ''}
                         ${canReviewNow ? `<div style="color:#8b5e3c;">待评价图书：${pendingReviewCount} 本</div>` : ''}
                     </div>
@@ -2921,6 +2988,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const statusLabel = ORDER_STATUS_LABELS[normalizeOrderStatus(order.status)] || order.status;
         const remainingText = getOrderRemainingText(order);
         const items = Array.isArray(order.items) ? order.items : [];
+        const isCancelled = normalizeOrderStatus(order.status) === 'cancelled';
         const canReviewOrder = normalizeOrderStatus(order.status) === 'received';
         const reviewableItems = items.filter(item => Number.isFinite(Number(item?.bookId)));
         const pendingReviewCount = getOrderPendingReviewCount(order);
@@ -2944,6 +3012,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <div class="book-detail-meta-item"><span class="book-detail-meta-label">发货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.shipmentDate))}</strong></div>
                     <div class="book-detail-meta-item"><span class="book-detail-meta-label">到货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.arrivedDate))}</strong></div>
                     <div class="book-detail-meta-item"><span class="book-detail-meta-label">收货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.receivedDate))}</strong></div>
+                    ${isCancelled && order.cancelDate ? `<div class="book-detail-meta-item"><span class="book-detail-meta-label">取消时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.cancelDate))}</strong></div>` : ''}
                     <div class="book-detail-meta-item"><span class="book-detail-meta-label">收货地址</span><strong class="book-detail-meta-value">${escapeHtml(order.shippingAddress || '-')}</strong></div>
                 </div>
             </div>
