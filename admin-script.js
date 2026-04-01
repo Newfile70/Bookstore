@@ -209,6 +209,43 @@ let ordersFilteredOrders = [];    // 存储当前订单列表（全量或状态�
         return wrapper.innerHTML;
     }
 
+    function encodeSummaryHtmlPayload(value) {
+        try {
+            return btoa(unescape(encodeURIComponent(String(value || ''))));
+        } catch {
+            return '';
+        }
+    }
+
+    function decodeSummaryHtmlPayload(value) {
+        try {
+            return decodeURIComponent(escape(atob(String(value || '').trim())));
+        } catch {
+            return '';
+        }
+    }
+
+    function extractEmbeddedSummaryHtml(description) {
+        const text = String(description || '');
+        const match = text.match(/<!--BOOKSTORE_SUMMARY_HTML:([A-Za-z0-9+/=]+)-->/);
+        if (!match || !match[1]) return '';
+        return decodeSummaryHtmlPayload(match[1]);
+    }
+
+    function stripEmbeddedSummaryFromDescription(description) {
+        return String(description || '')
+            .replace(/\s*<!--BOOKSTORE_SUMMARY_HTML:[A-Za-z0-9+/=]+-->/g, '')
+            .trim();
+    }
+
+    function embedSummaryHtmlIntoDescription(description, summaryHtml) {
+        const plainDescription = stripEmbeddedSummaryFromDescription(description) || '暂无简介';
+        const safeSummary = sanitizeSummaryHtml(summaryHtml || '<p>暂无简介</p>');
+        const encoded = encodeSummaryHtmlPayload(safeSummary);
+        if (!encoded) return plainDescription;
+        return `${plainDescription}\n<!--BOOKSTORE_SUMMARY_HTML:${encoded}-->`;
+    }
+
     function getAllowedTransitions(status) {
         const normalized = normalizeOrderStatus(status);
         return ORDER_STATUS_TRANSITIONS[normalized] || [];
@@ -289,6 +326,9 @@ let ordersFilteredOrders = [];    // 存储当前订单列表（全量或状态�
     }
 
     function normalizeBook(raw, index) {
+        const rawDescription = String(raw.description ?? '暂无简介');
+        const embeddedSummaryHtml = extractEmbeddedSummaryHtml(rawDescription);
+        const plainDescription = stripEmbeddedSummaryFromDescription(rawDescription) || '暂无简介';
         const photos = normalizeEditablePhotos([raw.photos, raw.images, raw.photo_urls, raw.image_urls]
             .filter(Boolean)
             .flatMap(value => splitPhotoInput(value))
@@ -304,8 +344,8 @@ let ordersFilteredOrders = [];    // 存储当前订单列表（全量或状态�
             category: raw.category ?? 'all',
             price: Number.parseFloat(raw.price) || 0,
             rating: Number.parseFloat(raw.rating) || 0,
-            description: raw.description ?? '暂无简介',
-            summaryHtml: sanitizeSummaryHtml(raw.summary_html || raw.summaryHtml || `<p>${raw.description ?? '暂无简介'}</p>`),
+            description: plainDescription,
+            summaryHtml: sanitizeSummaryHtml(raw.summary_html || raw.summaryHtml || embeddedSummaryHtml || `<p>${plainDescription}</p>`),
             publisher: raw.publisher || '未知出版社',
             isbn: raw.isbn || `ISBN-${String(index + 100000)}`,
             tags,
@@ -1362,6 +1402,11 @@ function renderOrders(ordersToRender = null) {
             const missingColumn = getMissingColumnName(error);
             if (!missingColumn) break;
             if (missingColumn === 'id') break;
+
+            if (missingColumn === 'summary_html') {
+                safePayload.description = embedSummaryHtmlIntoDescription(book.description, book.summaryHtml);
+            }
+
             if (!(missingColumn in safePayload)) break;
 
             delete safePayload[missingColumn];

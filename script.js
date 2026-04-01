@@ -157,7 +157,30 @@ document.addEventListener('DOMContentLoaded', async function() {
         return { status: 'pending', labels, reason };
     }
 
+    function decodeSummaryHtmlPayload(value) {
+        try {
+            return decodeURIComponent(escape(atob(String(value || '').trim())));
+        } catch {
+            return '';
+        }
+    }
+
+    function extractEmbeddedSummaryHtml(description) {
+        const text = String(description || '');
+        const match = text.match(/<!--BOOKSTORE_SUMMARY_HTML:([A-Za-z0-9+/=]+)-->/);
+        if (!match || !match[1]) return '';
+        return decodeSummaryHtmlPayload(match[1]);
+    }
+
+    function stripEmbeddedSummaryFromDescription(description) {
+        return String(description || '')
+            .replace(/\s*<!--BOOKSTORE_SUMMARY_HTML:[A-Za-z0-9+/=]+-->/g, '')
+            .trim();
+    }
+
     function normalizeStorefrontBook(raw, index = 0) {
+        const rawDescription = String(raw?.description ?? raw?.desc ?? '');
+        const embeddedSummary = extractEmbeddedSummaryHtml(rawDescription);
         const photos = normalizePhotoList(raw?.photos ?? raw?.photo_urls ?? raw?.images ?? raw?.image_urls);
         return {
             photos,
@@ -167,7 +190,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             category: raw?.category ?? raw?.cat ?? 'all',
             price: parseFloat(raw?.price) || 0,
             rating: parseFloat(raw?.rating) || 0,
-            description: raw?.description ?? raw?.desc ?? '',
+            description: stripEmbeddedSummaryFromDescription(rawDescription),
             tags: normalizeTextList(raw?.tags),
             publisher: raw?.publisher ?? '',
             isbn: raw?.isbn ?? '',
@@ -180,6 +203,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 ?? raw?.intro_html
                 ?? raw?.introduction_html
                 ?? raw?.detail_html
+                ?? embeddedSummary
                 ?? ''
         };
     }
