@@ -883,6 +883,11 @@ function persistBooks() {
                 .order-status-chip.status-arrived{background:#dcfce7;color:#166534;}
                 .order-status-chip.status-received{background:#ede9fe;color:#5b21b6;}
                 .order-status-chip.status-cancelled{background:#f3f4f6;color:#4b5563;}
+                .admin-order-actions .status-btn.is-enabled{font-weight:600;}
+                .admin-order-actions .status-btn.status-action-hold.is-enabled{background:#fff1f2;border-color:#fb7185;color:#be123c;}
+                .admin-order-actions .status-btn.status-action-shipped.is-enabled{background:#eff6ff;border-color:#60a5fa;color:#1d4ed8;}
+                .admin-order-actions .status-btn.status-action-arrived.is-enabled{background:#f0fdf4;border-color:#4ade80;color:#166534;}
+                .admin-order-actions .status-btn.status-action-cancelled.is-enabled{background:#f9fafb;border-color:#9ca3af;color:#374151;}
                 .admin-order-actions .status-btn.is-disabled,
                 .admin-order-actions .status-btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.2);}
                 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;padding:20px;}
@@ -1184,7 +1189,7 @@ function renderOrders(ordersToRender = null) {
         const allowedTransitions = new Set(getAllowedTransitions(normalizedStatus));
         const buildStatusActionBtn = (targetStatus, label) => {
             const enabled = allowedTransitions.has(targetStatus);
-            return `<button class="btn btn-outline status-btn ${enabled ? '' : 'is-disabled'}" type="button" data-id="${order.id}" data-status="${targetStatus}" ${enabled ? '' : 'disabled title="当前状态不可操作"'}>${label}</button>`;
+            return `<button class="btn btn-outline status-btn status-action-${targetStatus} ${enabled ? 'is-enabled' : 'is-disabled'}" type="button" data-id="${order.id}" data-status="${targetStatus}" ${enabled ? '' : 'disabled title="当前状态不可操作"'}>${label}</button>`;
         };
         const card = document.createElement('div');
         card.className = 'admin-order-card';
