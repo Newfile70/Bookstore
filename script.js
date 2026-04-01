@@ -3991,6 +3991,47 @@ if (checkoutBtn) {
         return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     }
 
+    function sanitizeBookSummaryHtml(html) {
+        const raw = String(html || '').trim();
+        if (!raw) return '<p>暂无简介</p>';
+
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = raw;
+
+        wrapper.querySelectorAll('script, iframe, object, embed, style, link').forEach(node => node.remove());
+
+        wrapper.querySelectorAll('*').forEach(node => {
+            [...node.attributes].forEach(attr => {
+                const name = String(attr.name || '').toLowerCase();
+                const value = String(attr.value || '').trim();
+
+                if (name.startsWith('on')) {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+
+                if (['href', 'src'].includes(name) && /^javascript:/i.test(value)) {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+
+                if (name === 'target' && value === '_blank') {
+                    node.setAttribute('rel', 'noopener noreferrer');
+                }
+            });
+        });
+
+        const sanitized = wrapper.innerHTML.trim();
+        return sanitized || '<p>暂无简介</p>';
+    }
+
+    function getBookSummaryHtml(book) {
+        const rawSummary = String(book?.summaryHtml || '').trim();
+        if (rawSummary) return sanitizeBookSummaryHtml(rawSummary);
+        const fallbackText = escapeHtml(String(book?.description || '暂无简介').replace(/<[^>]+>/g, '').trim() || '暂无简介');
+        return `<p>${fallbackText}</p>`;
+    }
+
     function sanitizeColor(value) {
         const color = String(value || '').trim();
         if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) return color;
@@ -4832,6 +4873,7 @@ if (checkoutBtn) {
 
         const tags = normalizeTextList(book.tags);
         const photoUrls = getBookPhotoUrls(book);
+        const safeSummaryHtml = getBookSummaryHtml(book);
         const metaRows = getBookMetaRows(book).map(item => `
             <div class="book-detail-meta-item">
                 <span class="book-detail-meta-label">${escapeHtml(item.label)}</span>
@@ -4884,6 +4926,10 @@ if (checkoutBtn) {
             <div class="book-detail-section">
                 <h3>图书信息</h3>
                 <div class="book-detail-meta-grid">${metaRows}</div>
+            </div>
+            <div class="book-detail-section">
+                <h3>图书简介</h3>
+                <div class="book-detail-richtext">${safeSummaryHtml}</div>
             </div>
             <div class="book-detail-section">
                 <h3>内容亮点</h3>
@@ -5217,6 +5263,41 @@ if (checkoutBtn) {
 
         .book-detail-section h3 {
             margin-bottom: 16px;
+        }
+
+        .book-detail-richtext {
+            color: #374151;
+            line-height: 1.8;
+            word-break: break-word;
+        }
+
+        .book-detail-richtext p,
+        .book-detail-richtext ul,
+        .book-detail-richtext ol,
+        .book-detail-richtext blockquote,
+        .book-detail-richtext pre,
+        .book-detail-richtext table,
+        .book-detail-richtext h1,
+        .book-detail-richtext h2,
+        .book-detail-richtext h3,
+        .book-detail-richtext h4 {
+            margin: 0 0 12px;
+        }
+
+        .book-detail-richtext ul,
+        .book-detail-richtext ol {
+            padding-left: 20px;
+        }
+
+        .book-detail-richtext a {
+            color: #8c5a30;
+            text-decoration: underline;
+        }
+
+        .book-detail-richtext img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
         }
 
         .book-detail-meta-grid {

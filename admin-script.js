@@ -876,6 +876,14 @@ function persistBooks() {
                 .admin-product-card,.admin-order-card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.06);display:flex;flex-direction:column;gap:10px;}
                 .admin-card-actions,.admin-order-actions{display:flex;gap:10px;flex-wrap:wrap;}
                 .admin-chip{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef2ff;color:#4338ca;font-size:13px;}
+                .order-status-chip.status-pending{background:#fef3c7;color:#92400e;}
+                .order-status-chip.status-hold{background:#fee2e2;color:#991b1b;}
+                .order-status-chip.status-shipped{background:#dbeafe;color:#1e40af;}
+                .order-status-chip.status-arrived{background:#dcfce7;color:#166534;}
+                .order-status-chip.status-received{background:#ede9fe;color:#5b21b6;}
+                .order-status-chip.status-cancelled{background:#f3f4f6;color:#4b5563;}
+                .admin-order-actions .status-btn.is-disabled,
+                .admin-order-actions .status-btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.2);}
                 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;padding:20px;}
                 .modal.active{display:flex;}
                 .modal-content{background:#fff;border-radius:16px;width:min(900px,100%);padding:24px;max-height:90vh;overflow:auto;}
@@ -1168,6 +1176,12 @@ function renderOrders(ordersToRender = null) {
         return;
     }
     filteredOrders.forEach(order => {
+        const normalizedStatus = normalizeOrderStatus(order.status);
+        const allowedTransitions = new Set(getAllowedTransitions(normalizedStatus));
+        const buildStatusActionBtn = (targetStatus, label) => {
+            const enabled = allowedTransitions.has(targetStatus);
+            return `<button class="btn btn-outline status-btn ${enabled ? '' : 'is-disabled'}" type="button" data-id="${order.id}" data-status="${targetStatus}" ${enabled ? '' : 'disabled title="当前状态不可操作"'}>${label}</button>`;
+        };
         const card = document.createElement('div');
         card.className = 'admin-order-card';
         card.innerHTML = `
@@ -1178,15 +1192,15 @@ function renderOrders(ordersToRender = null) {
                     <div>下单时间：${formatDate(order.purchaseDate)}</div>
                     <div>总额：¥ ${(order.totalAmount || 0).toFixed(2)}</div>
                 </div>
-                <div class="admin-chip">${ORDER_STATUS_LABELS[order.status] || order.status}</div>
+                <div class="admin-chip order-status-chip status-${normalizedStatus}">${ORDER_STATUS_LABELS[normalizedStatus] || normalizedStatus}</div>
             </div>
             <div>收货地址：${order.shippingAddress || '-'}</div>
             <div class="admin-order-actions">
                 <button class="btn btn-secondary view-order-btn" type="button" data-id="${order.id}">查看详情</button>
-                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="hold">设为暂缓</button>
-                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="shipped">发货</button>
-                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="arrived">已到货</button>
-                <button class="btn btn-outline status-btn" type="button" data-id="${order.id}" data-status="cancelled">取消</button>
+                ${buildStatusActionBtn('hold', '设为暂缓')}
+                ${buildStatusActionBtn('shipped', '发货')}
+                ${buildStatusActionBtn('arrived', '已到货')}
+                ${buildStatusActionBtn('cancelled', '取消')}
             </div>
         `;
         card.querySelector('.view-order-btn')?.addEventListener('click', () => openOrderModal(order.id));
@@ -1393,20 +1407,19 @@ function searchBooks() {
         productsFilteredBooks = books;
     } else {
         const queryLower = query.toLowerCase();
-        const isNumeric = /^\d+$/.test(query);   // 纯数字 → 视为 ID 精确搜索
+        const isNumeric = /^\d+$/.test(query);   // 纯数字 → 视为 ID 模糊搜索
 
         let filtered = [];
 
         if (isNumeric) {
-            // === ID 精确搜索（优先）===
-            const targetId = String(query);   // 支持字符串或数字 ID
+            // === ID 模糊搜索（优先）===
+            const targetIdFragment = String(query);
             filtered = books.filter(book => 
-                String(book.id) === targetId || 
-                Number(book.id) === Number(query)
+                String(book.id).includes(targetIdFragment)
             );
         }
 
-        // 如果 ID 精确搜索没有结果，或不是纯数字，则执行原有模糊搜索
+        // 如果 ID 模糊搜索没有结果，或不是纯数字，则执行原有文本模糊搜索
         if (!filtered.length) {
             filtered = books.filter(book => {
                 const haystack = [
