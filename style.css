@@ -651,6 +651,22 @@ p { color: var(--text-light); }
     box-shadow: var(--shadow-hover);
 }
 
+/* 管理页订单状态颜色（静态样式兜底，避免部署环境阻止动态注入样式） */
+.order-status-chip.status-pending { background: #fef3c7 !important; color: #92400e !important; }
+.order-status-chip.status-hold { background: #fee2e2 !important; color: #991b1b !important; }
+.order-status-chip.status-shipped { background: #dbeafe !important; color: #1e40af !important; }
+.order-status-chip.status-arrived { background: #dcfce7 !important; color: #166534 !important; }
+.order-status-chip.status-received { background: #ede9fe !important; color: #5b21b6 !important; }
+.order-status-chip.status-cancelled { background: #f3f4f6 !important; color: #4b5563 !important; }
+
+.admin-order-actions .status-btn.is-enabled { font-weight: 600; }
+.admin-order-actions .status-btn.status-action-hold.is-enabled { background: #fff1f2 !important; border-color: #fb7185 !important; color: #be123c !important; }
+.admin-order-actions .status-btn.status-action-shipped.is-enabled { background: #eff6ff !important; border-color: #60a5fa !important; color: #1d4ed8 !important; }
+.admin-order-actions .status-btn.status-action-arrived.is-enabled { background: #f0fdf4 !important; border-color: #4ade80 !important; color: #166534 !important; }
+.admin-order-actions .status-btn.status-action-cancelled.is-enabled { background: #f9fafb !important; border-color: #9ca3af !important; color: #374151 !important; }
+.admin-order-actions .status-btn.is-disabled,
+.admin-order-actions .status-btn:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.2); }
+
 .book-image {
     height: 200px;
     background: #e9ecef;
