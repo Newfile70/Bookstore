@@ -174,7 +174,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             disabled: toBooleanFlag(raw?.disabled),
             color: raw?.color ?? '#b09d7b',
             coverUrl: sanitizeImageUrl(raw?.cover_url ?? raw?.coverUrl ?? photos[0] ?? ''),
-            summaryHtml: raw?.summary_html ?? raw?.summaryHtml ?? ''
+            summaryHtml: raw?.summary_html
+                ?? raw?.summaryHtml
+                ?? raw?.summary
+                ?? raw?.intro_html
+                ?? raw?.introduction_html
+                ?? raw?.detail_html
+                ?? ''
         };
     }
 
@@ -4028,6 +4034,12 @@ if (checkoutBtn) {
     function getBookSummaryHtml(book) {
         const rawSummary = String(book?.summaryHtml || '').trim();
         if (rawSummary) return sanitizeBookSummaryHtml(rawSummary);
+
+        const rawDescription = String(book?.description || '').trim();
+        if (/<[a-z][\s\S]*>/i.test(rawDescription)) {
+            return sanitizeBookSummaryHtml(rawDescription);
+        }
+
         const fallbackText = escapeHtml(String(book?.description || '暂无简介').replace(/<[^>]+>/g, '').trim() || '暂无简介');
         return `<p>${fallbackText}</p>`;
     }
