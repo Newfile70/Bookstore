@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="register-title">懒得起名小书铺 - 注册</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
+    <script src="i18n.js"></script>
+    <style>
+        /* 注册页面特有样式 */
+        .register-page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--light-color);
+            background-image: linear-gradient(rgba(0,0,0,0.01) 1px, transparent 1px);
+            background-size: 100% 28px;
+        }
+        
+        .register-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+        
+        .register-wrapper {
+            display: flex;
+            width: 100%;
+            max-width: 1000px;
+            background: white;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-hover);
+            min-height: 500px;
+        }
+        
+        .register-left {
+            flex: 1;
+            background: linear-gradient(135deg, #4a6fa5, #6b8cbc);
+            color: white;
+            padding: 50px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .register-left::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><path fill="rgba(255,255,255,0.05)" d="M0,0 L100,0 L100,100 Z" /><path fill="rgba(255,255,255,0.1)" d="M0,0 L0,100 L100,100 Z" /></svg>');
+            background-size: 50px 50px;
+            opacity: 0.3;
+        }
+        
+        .register-right {
+            flex: 1;
+            padding: 50px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        
+        .register-logo {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .register-logo h1 {
+            font-size: 28px;
+            color: white;
+            margin-bottom: 0;
+        }
+        
+        .register-logo .tagline {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+            margin-top: 5px;
+        }
+        
+        .register-left h2 {
+            font-size: 32px;
+            margin-bottom: 20px;
+            color: white;
+        }
+        
+        .register-left p {
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        
+        .register-features {
+            list-style: none;
+            margin-top: 30px;
+        }
+        
+        .register-features li {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .register-features i {
+            margin-right: 10px;
+            color: var(--accent-color);
+            font-size: 18px;
+        }
+        
+        .register-form {
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        
+        .register-form h2 {
+            font-size: 28px;
+            margin-bottom: 30px;
+            color: var(--primary-color);
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .register-mode-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .register-mode-btn {
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            background: #fff;
+            color: var(--text-color);
+            padding: 10px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .register-mode-btn.active {
+            background: var(--primary-color);
+            color: #fff;
+            border-color: var(--primary-color);
+        }
+
+        .register-mode-tip {
+            font-size: 13px;
+            color: var(--text-light);
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text-color);
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            font-size: 16px;
+            transition: var(--transition);
+            font-family: var(--font-body);
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(74, 111, 165, 0.1);
+        }
+        
+        .form-row {
+            display: flex;
+            gap: 15px;
+        }
+        
+        .form-row .form-group {
+            flex: 1;
+        }
+        
+        .form-checkbox {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 25px;
+        }
+        
+        .form-checkbox input {
+            margin-right: 10px;
+            margin-top: 5px;
+        }
+        
+        .form-checkbox label {
+            font-size: 14px;
+            color: var(--text-light);
+            line-height: 1.4;
+        }
+        
+        .form-checkbox a {
+            color: var(--primary-color);
+            text-decoration: none;
+        }
+        
+        .form-checkbox a:hover {
+            text-decoration: underline;
+        }
+        
+        .register-btn {
+            width: 100%;
+            padding: 14px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        
+        .password-requirements {
+            font-size: 12px;
+            color: var(--text-light);
+            margin-top: 5px;
+            margin-bottom: 15px;
+        }
+        
+        .password-strength {
+            height: 4px;
+            background-color: #e9ecef;
+            border-radius: 2px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        
+        .password-strength-bar {
+            height: 100%;
+            width: 0%;
+            background-color: #dc3545;
+            transition: width 0.3s ease;
+        }
+        
+        .password-strength-bar.weak { width: 25%; background-color: #dc3545; }
+        .password-strength-bar.fair { width: 50%; background-color: #ffc107; }
+        .password-strength-bar.good { width: 75%; background-color: #28a745; }
+        .password-strength-bar.strong { width: 100%; background-color: #20c997; }
+        
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--text-light);
+            cursor: pointer;
+        }
+        
+        .password-input {
+            position: relative;
+        }
+        
+        .divider {
+            display: flex;
+            align-items: center;
+            margin: 25px 0;
+            color: var(--text-light);
+        }
+        
+        .divider::before, .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background-color: var(--border-color);
+        }
+        
+        .divider span {
+            padding: 0 15px;
+            font-size: 14px;
+        }
+        
+        .login-link {
+            text-align: center;
+            margin-top: 20px;
+            color: var(--text-light);
+            font-size: 15px;
+        }
+        
+        .login-link a {
+            color: var(--primary-color);
+            font-weight: 500;
+            text-decoration: none;
+        }
+        
+        .login-link a:hover {
+            text-decoration: underline;
+        }
+        
+        .register-message {
+            padding: 10px 15px;
+            border-radius: var(--border-radius);
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 14px;
+            display: none;
+        }
+        
+        .register-message.success {
+            background-color: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border: 1px solid rgba(40, 167, 69, 0.2);
+            display: block;
+        }
+        
+        .register-message.error {
+            background-color: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+            border: 1px solid rgba(220, 53, 69, 0.2);
+            display: block;
+        }
+        
+        .register-message.info {
+            background-color: rgba(23, 162, 184, 0.1);
+            color: #17a2b8;
+            border: 1px solid rgba(23, 162, 184, 0.2);
+            display: block;
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .register-wrapper {
+                flex-direction: column;
+                max-width: 500px;
+            }
+            
+            .register-left, .register-right {
+                padding: 40px 30px;
+            }
+            
+            .register-left {
+                padding-bottom: 30px;
+            }
+            
+            .form-row {
+                flex-direction: column;
+                gap: 0;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .register-left, .register-right {
+                padding: 30px 20px;
+            }
+            
+            .register-left h2 {
+                font-size: 26px;
+            }
+            
+            .register-form h2 {
+                font-size: 24px;
+            }
+
+            .register-mode-switch {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body class="register-page">
+    <!-- 头部导航栏 -->
+    <header class="header">
+        <div class="container">
+            <nav class="navbar">
+                <div class="logo">
+                    <h1><i class="fas fa-book-open"></i> <span data-i18n="nav-logo">懒得起名小书铺</span></h1>
+                    <p class="tagline" data-i18n="nav-tagline">智能推荐 · 悦读无限</p>
+                </div>
+                
+                <div class="nav-links">
+                    <a href="bookstore.html" class="nav-link"><i class="fas fa-home"></i> <span data-i18n="register-back-to-home">返回首页</span></a>
+                    <a href="index.html" class="nav-link"><i class="fas fa-sign-in-alt"></i> <span data-i18n="nav-login">登录</span></a>
+                    <a href="#" class="nav-link active"><i class="fas fa-user-plus"></i> <span data-i18n="nav-register">注册</span></a>
+                    <a href="#" id="lang-toggle-btn" class="nav-link" style="font-weight: bold; color: var(--accent-color);" data-i18n="lang-toggle-text">EN</a>
+                </div>
+                
+                <button class="menu-toggle" id="menu-toggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- 注册主要内容区 -->
+    <main class="register-container">
+        <div class="register-wrapper">
+            <!-- 左侧宣传内容 -->
+            <div class="register-left">
+                <div class="register-logo">
+                    <div>
+                        <h1><i class="fas fa-book-open"></i> <span data-i18n="nav-logo">懒得起名小书铺</span></h1>
+                        <p class="tagline" data-i18n="nav-tagline">智能推荐 · 悦读无限</p>
+                    </div>
+                </div>
+                
+                <h2 data-i18n="register-left-title">加入阅读的世界</h2>
+                <p data-i18n="register-left-desc">创建您的账户，开启个性化阅读体验。AI智能算法将根据您的喜好推荐书籍，记录您的阅读历史，让每一本书都成为一次独特的旅程。</p>
+                
+                <ul class="register-features">
+                    <li><i class="fas fa-check-circle"></i> <span data-i18n="register-feature-ai">AI智能图书推荐</span></li>
+                    <li><i class="fas fa-check-circle"></i> <span data-i18n="register-feature-history">个性化阅读历史记录</span></li>
+                    <li><i class="fas fa-check-circle"></i> <span data-i18n="register-feature-sync">跨设备同步书单</span></li>
+                    <li><i class="fas fa-check-circle"></i> <span data-i18n="register-feature-secure">安全加密交易</span></li>
+                    <li><i class="fas fa-check-circle"></i> <span data-i18n="register-feature-member">会员专属优惠</span></li>
+                    <li><i class="fas fa-check-circle"></i> <span data-i18n="register-feature-community">参与用户社区讨论</span></li>
+                </ul>
+            </div>
+            
+            <!-- 右侧注册表单 -->
+            <div class="register-right">
+                <form class="register-form" id="registerForm">
+                    <h2 id="registerTitle" data-i18n="register-title-user">用户注册</h2>
+                    
+                    <div id="registerMessage" class="register-message"></div>
+
+                    <div class="register-mode-switch" id="registerModeSwitch">
+                        <button type="button" class="register-mode-btn active" data-mode="user" data-i18n="register-mode-user">普通用户注册</button>
+                        <button type="button" class="register-mode-btn" data-mode="merchant" data-i18n="register-mode-merchant">商户注册</button>
+                    </div>
+
+                    <div class="register-mode-tip" id="registerModeTip" data-i18n="register-mode-tip-user">创建普通用户账户，用于浏览与购买图书</div>
+                    
+                    <div class="form-row">
+                        <div class="form-group user-only">
+                            <label class="form-label" for="fullName" data-i18n="register-fullname-label">姓名</label>
+                            <input type="text" id="fullName" class="form-control" data-i18n-placeholder="register-fullname-placeholder" placeholder="请输入您的姓名">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label" for="username" data-i18n="register-username-label">用户名 *</label>
+                            <input type="text" id="username" class="form-control" data-i18n-placeholder="register-username-placeholder" placeholder="请输入用户名" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group merchant-only" style="display:none;">
+                        <label class="form-label" for="shopName" data-i18n="register-shopname-label">店铺名称 *</label>
+                        <input type="text" id="shopName" class="form-control" data-i18n-placeholder="register-shopname-placeholder" placeholder="请输入店铺名称">
+                    </div>
+
+                    <div class="form-group merchant-only" style="display:none;">
+                        <label class="form-label" for="merchantContact" data-i18n="register-merchant-contact-label">商户联系电话</label>
+                        <input type="text" id="merchantContact" class="form-control" data-i18n-placeholder="register-merchant-contact-placeholder" placeholder="请输入联系电话（可选）">
+                    </div>
+                    
+                    <div class="form-group user-only">
+                        <label class="form-label" for="email" data-i18n="register-email-label">邮箱地址 *</label>
+                        <input type="email" id="email" class="form-control" data-i18n-placeholder="register-email-placeholder" placeholder="请输入邮箱地址" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="password" data-i18n="register-password-label">密码 *</label>
+                        <div class="password-input">
+                            <input type="password" id="password" class="form-control" data-i18n-placeholder="register-password-placeholder" placeholder="请输入密码" required>
+                            <button type="button" class="password-toggle" id="togglePassword">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                        <div class="password-requirements" data-i18n="register-password-requirements">密码长度至少8位，包含字母和数字</div>
+                        <div class="password-strength">
+                            <div class="password-strength-bar" id="passwordStrengthBar"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="confirmPassword" data-i18n="register-confirm-password-label">确认密码 *</label>
+                        <div class="password-input">
+                            <input type="password" id="confirmPassword" class="form-control" data-i18n-placeholder="register-confirm-password-placeholder" placeholder="请再次输入密码" required>
+                            <button type="button" class="password-toggle" id="toggleConfirmPassword">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group user-only">
+                        <label class="form-label" for="shippingAddress" data-i18n="register-shipping-address-label">收货地址 *</label>
+                        <textarea id="shippingAddress" class="form-control" rows="3" 
+                            data-i18n-placeholder="register-shipping-address-placeholder" placeholder="请输入详细收货地址（省/市/区 + 街道门牌）" required></textarea>
+                    </div>
+
+                    <div class="form-checkbox">
+                        <input type="checkbox" id="agreeTerms" required>
+                        <label for="agreeTerms" data-i18n="register-agree-terms">
+                            我已阅读并同意 <a href="#" target="_blank">《服务条款》</a> 和 <a href="#" target="_blank">《隐私政策》</a>
+                        </label>
+                    </div>
+                    
+                    <div class="form-checkbox user-only">
+                        <input type="checkbox" id="subscribeNews">
+                        <label for="subscribeNews" data-i18n="register-subscribe-news">
+                            订阅最新图书推荐和优惠信息
+                        </label>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary register-btn" data-i18n="register-submit-btn">注册账号</button>
+                    
+                    <div class="divider"><span data-i18n="register-divider-or">已有账户？</span></div>
+                    
+                    <div class="login-link" data-i18n="register-login-text">
+                        已有账户？ <a href="index.html" id="loginLink" data-i18n="register-login-link">立即登录</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </main>
+
+    <!-- 页脚 -->
+    <footer class="footer text-dark">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3><i class="fas fa-book-open"></i> 懒得起名小书铺</h3>
+                    <p>一个由AI驱动的智能在线书店，致力于为读者提供个性化、便捷的购书体验。</p>
+                    <div class="social-icons">
+                        <a href="#"><i class="fab fa-weixin"></i></a>
+                        <a href="#"><i class="fab fa-weibo"></i></a>
+                        <a href="#"><i class="fab fa-github"></i></a>
+                        <a href="#"><i class="fab fa-twitter"></i></a>
+                    </div>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>快速链接</h4>
+                    <ul>
+                        <li><a href="bookstore.html">首页</a></li>
+                        <li><a href="bookstore.html#books">所有图书</a></li>
+                        <li><a href="bookstore.html#recommendations">智能推荐</a></li>
+                        <li><a href="#">帮助中心</a></li>
+                        <li><a href="#">联系我们</a></li>
+                    </ul>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>用户服务</h4>
+                    <ul>
+                        <li><a href="#">我的账户</a></li>
+                        <li><a href="#">订单查询</a></li>
+                        <li><a href="#">隐私政策</a></li>
+                        <li><a href="#">服务条款</a></li>
+                        <li><a href="#">常见问题</a></li>
+                    </ul>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>项目信息</h4>
+                    <p>CSAI3124课程项目 - 在线智能书店</p>
+                    <p>开发团队：张徐瑞(项目经理)、吴军浩、吴莹莹、张玥冉、卢卓谦</p>
+                    <p>指导老师：[教师姓名]</p>
+                    <p>2025/2026学年</p>
+                </div>
+            </div>
+            
+            <div class="footer-bottom">
+                <p>&copy; 2025-2026 懒得起名小书铺 - 在线智能书店. 保留所有权利. 本网站仅为课程项目演示.</p>
+                <p class="security-info"><i class="fas fa-lock"></i> 本网站采用HTTPS加密传输，符合OWASP安全标准</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Supabase配置（使用与登录页面相同的配置）
+            const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
+            const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
+            
+            // 创建Supabase客户端
+            const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            
+            // DOM元素
+            const registerForm = document.getElementById('registerForm');
+            const registerMessage = document.getElementById('registerMessage');
+            const usernameInput = document.getElementById('username');
+            const emailInput = document.getElementById('email');
+            const passwordInput = document.getElementById('password');
+            const confirmPasswordInput = document.getElementById('confirmPassword');
+            const fullNameInput = document.getElementById('fullName');
+            const shopNameInput = document.getElementById('shopName');
+            const merchantContactInput = document.getElementById('merchantContact');
+            const passwordStrengthBar = document.getElementById('passwordStrengthBar');
+            const togglePasswordBtn = document.getElementById('togglePassword');
+            const toggleConfirmPasswordBtn = document.getElementById('toggleConfirmPassword');
+            const menuToggle = document.getElementById('menu-toggle');
+            const navLinks = document.querySelector('.nav-links');
+            const registerModeBtns = document.querySelectorAll('.register-mode-btn');
+            const registerTitle = document.getElementById('registerTitle');
+            const registerModeTip = document.getElementById('registerModeTip');
+
+            let currentRegisterMode = 'user';
+
+            function setRegisterMode(mode) {
+                currentRegisterMode = mode === 'merchant' ? 'merchant' : 'user';
+
+                registerModeBtns.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === currentRegisterMode);
+                });
+
+                const userOnlyElements = document.querySelectorAll('.user-only');
+                const merchantOnlyElements = document.querySelectorAll('.merchant-only');
+
+                if (currentRegisterMode === 'merchant') {
+                    registerTitle.setAttribute('data-i18n', 'register-title-merchant');
+                    registerModeTip.setAttribute('data-i18n', 'register-mode-tip-merchant');
+                    userOnlyElements.forEach(el => { el.style.display = 'none'; });
+                    merchantOnlyElements.forEach(el => { el.style.display = ''; });
+
+                    emailInput.required = false;
+                    emailInput.value = '';
+                    document.getElementById('shippingAddress').required = false;
+                    document.getElementById('shippingAddress').value = '';
+                    shopNameInput.required = true;
+                } else {
+                    registerTitle.setAttribute('data-i18n', 'register-title-user');
+                    registerModeTip.setAttribute('data-i18n', 'register-mode-tip-user');
+                    userOnlyElements.forEach(el => { el.style.display = ''; });
+                    merchantOnlyElements.forEach(el => { el.style.display = 'none'; });
+
+                    emailInput.required = true;
+                    document.getElementById('shippingAddress').required = true;
+                    shopNameInput.required = false;
+                    shopNameInput.value = '';
+                    merchantContactInput.value = '';
+                }
+
+                // 立即更新文本内容
+                updateLanguage(currentLang);
+            }
+            
+            // 显示消息
+            function showMessage(message, type) {
+                registerMessage.textContent = message;
+                registerMessage.className = `register-message ${type}`;
+                registerMessage.style.display = 'block';
+                setTimeout(() => { registerMessage.style.display = 'none'; }, 5000);
+            }
+            
+            // 密码强度检查
+            function checkPasswordStrength(password) {
+                if (!password) return 'empty';
+                
+                let strength = 0;
+                
+                // 长度检查
+                if (password.length >= 8) strength += 1;
+                if (password.length >= 12) strength += 1;
+                
+                // 字符类型检查
+                if (/[a-z]/.test(password)) strength += 1;
+                if (/[A-Z]/.test(password)) strength += 1;
+                if (/\d/.test(password)) strength += 1;
+                if (/[^a-zA-Z0-9]/.test(password)) strength += 1;
+                
+                if (strength <= 2) return 'weak';
+                if (strength === 3) return 'fair';
+                if (strength === 4) return 'good';
+                return 'strong';
+            }
+            
+            // 更新密码强度显示
+            function updatePasswordStrength() {
+                const password = passwordInput.value;
+                const strength = checkPasswordStrength(password);
+                
+                passwordStrengthBar.className = 'password-strength-bar';
+                
+                if (password.length === 0) {
+                    passwordStrengthBar.style.width = '0%';
+                    return;
+                }
+                
+                passwordStrengthBar.classList.add(strength);
+                
+                // 更新提示信息
+                const strengthLabels = {
+                    'weak': t('register-script-password-strength-weak'),
+                    'fair': t('register-script-password-strength-fair'),
+                    'good': t('register-script-password-strength-good'),
+                    'strong': t('register-script-password-strength-strong')
+                };
+                
+                if (passwordStrengthBar.parentNode.previousElementSibling) {
+                    passwordStrengthBar.parentNode.previousElementSibling.textContent = 
+                        strengthLabels[strength] || '密码强度：弱';
+                }
+            }
+            
+            // 切换密码可见性
+            function togglePasswordVisibility(input, button) {
+                const type = input.getAttribute('type') === 'password' ? 'text' : 'password';
+                input.setAttribute('type', type);
+                
+                // 更新图标
+                const icon = button.querySelector('i');
+                icon.className = type === 'password' ? 'fas fa-eye' : 'fas fa-eye-slash';
+            }
+            
+            // 表单验证
+            function validateForm() {
+                const username = usernameInput.value.trim();
+                const password = passwordInput.value;
+                const confirmPassword = confirmPasswordInput.value;
+                
+                // 用户名验证
+                if (username.length < 3) {
+                    showMessage(t('register-script-username-min-length'), 'error');
+                    return false;
+                }
+                
+                if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+                    showMessage(t('register-script-username-invalid'), 'error');
+                    return false;
+                }
+
+                if (currentRegisterMode === 'merchant') {
+                    const shopName = shopNameInput.value.trim();
+                    if (shopName.length < 2) {
+                        showMessage(t('register-script-shop-name-min-length'), 'error');
+                        return false;
+                    }
+                } else {
+                    const email = emailInput.value.trim();
+                    if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
+                        showMessage(t('register-script-email-invalid'), 'error');
+                        return false;
+                    }
+                }
+                
+                // 密码验证
+                if (password.length < 8) {
+                    showMessage(t('register-script-password-min-length'), 'error');
+                    return false;
+                }
+                
+                // 密码强度检查
+                const strength = checkPasswordStrength(password);
+                if (strength === 'weak') {
+                    showMessage(t('register-script-password-weak'), 'error');
+                    return false;
+                }
+                
+                // 确认密码
+                if (password !== confirmPassword) {
+                    showMessage(t('register-script-password-mismatch'), 'error');
+                    return false;
+                }
+                
+                return true;
+            }
+
+            function normalizeEmailForAuth(rawEmail) {
+                const email = String(rawEmail || '').trim();
+                if (!email.includes('@')) return email;
+                const [localPart, domainPart] = email.split('@');
+                if (!localPart || !domainPart) return email;
+                if (domainPart.includes('.')) return email;
+                return `${localPart}@${domainPart}.local`;
+            }
+            
+            // 处理注册表单提交（使用 Supabase Auth 创建用户，然后插入 profile）
+            registerForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+
+                if (!validateForm()) return;
+
+                const username = usernameInput.value.trim();
+                const password = passwordInput.value;
+                const fullName = fullNameInput.value.trim();
+                const email = normalizeEmailForAuth(emailInput.value.trim());
+                const subscribeNews = document.getElementById('subscribeNews').checked;
+                const shippingAddress = document.getElementById('shippingAddress').value.trim();
+                const shopName = shopNameInput.value.trim();
+                const merchantContact = merchantContactInput.value.trim();
+
+                const submitBtn = registerForm.querySelector('.register-btn');
+                const originalText = submitBtn.textContent;
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + t('register-script-registering');
+                submitBtn.disabled = true;
+
+                try {
+                    if (currentRegisterMode === 'merchant') {
+                        const { data: merchantResult, error: merchantError } = await supabaseClient.rpc('register_merchant', {
+                            p_username: username,
+                            p_password: password,
+                            p_shop_name: shopName,
+                            p_contact_phone: merchantContact || null
+                        });
+
+                        if (merchantError) throw merchantError;
+                        if (!merchantResult?.ok) {
+                            throw new Error(merchantResult?.message || '商户注册失败');
+                        }
+
+                        showMessage(t('register-script-merchant-success'), 'success');
+                        setTimeout(() => { window.location.href = 'index.html?mode=merchant'; }, 1800);
+                        return;
+                    }
+
+                    // 使用 Supabase Auth 创建用户（不要在 DB 表里存明文密码）
+                    const { data: signUpData, error: signUpError } = await supabaseClient.auth.signUp({ email, password });
+                    if (signUpError) throw signUpError;
+
+                    // 兼容返回结构：v2 的 data 里可能包含 user
+                    const userId = signUpData?.user?.id ?? signUpData?.id ?? null;
+
+                    // 如果需要邮箱确认，告知用户并仍然写入 profile（不含密码）
+                    const profile = {
+                        id: userId,
+                        username: username,
+                        email: email,
+                        full_name: fullName || null,
+                        shipping_address: shippingAddress || null,
+                        subscribe_news: subscribeNews
+                    };
+
+                    const { error: insertError } = await supabaseClient.from('users').insert([profile]);
+                    if (insertError) throw insertError;
+
+                    // 成功反馈：如果启用邮箱确认，用户需到邮箱激活
+                    const needsConfirmation = !!(signUpData?.user?.confirmed_at === null || signUpData?.confirmation?.status);
+                    if (needsConfirmation) {
+                        showMessage(t('register-script-user-success-confirm'), 'success');
+                    } else {
+                        showMessage(t('register-script-user-success'), 'success');
+                    }
+
+                    sessionStorage.setItem('registeredEmail', email);
+                    setTimeout(() => { window.location.href = 'index.html'; }, 2000);
+
+                } catch (error) {
+                    console.error('注册错误:', error);
+
+                    const msg = (error && error.message) ? error.message : String(error);
+
+                    if (msg.includes('duplicate') || msg.includes('already')) {
+                        showMessage(t('register-script-duplicate-error'), 'error');
+                    } else if (msg.includes('invalid')) {
+                        showMessage(t('register-script-invalid-error'), 'error');
+                    } else if (msg.includes('商户用户名已存在') || msg.includes('用户名已被占用')) {
+                        showMessage(msg, 'error');
+                    } else if (msg.includes('violates row-level security')) {
+                        showMessage(t('register-script-rls-error'), 'error');
+                    } else {
+                        showMessage(t('register-script-generic-error') + msg, 'error');
+                    }
+
+                } finally {
+                    // 恢复按钮状态
+                    submitBtn.textContent = originalText;
+                    submitBtn.disabled = false;
+                }
+            });
+            
+            // 密码强度实时检查
+            passwordInput.addEventListener('input', updatePasswordStrength);
+            
+            // 切换密码可见性
+            togglePasswordBtn.addEventListener('click', function() {
+                togglePasswordVisibility(passwordInput, this);
+            });
+            
+            toggleConfirmPasswordBtn.addEventListener('click', function() {
+                togglePasswordVisibility(confirmPasswordInput, this);
+            });
+
+            registerModeBtns.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    setRegisterMode(this.dataset.mode);
+                });
+            });
+            
+            // 移动端菜单切换
+            menuToggle.addEventListener('click', function() {
+                navLinks.classList.toggle('active');
+            });
+
+            const modeFromQuery = new URLSearchParams(window.location.search).get('mode');
+            setRegisterMode(modeFromQuery === 'merchant' ? 'merchant' : 'user');
+
+            // 语言切换处理
+            window.onLanguageChanged = function(lang) {
+                // 重新设置当前模式的标题和提示文本
+                setRegisterMode(currentRegisterMode);
+                
+                // 更新密码强度标签（如果有显示的话）
+                const passwordStrengthBar = document.getElementById('passwordStrengthBar');
+                if (passwordStrengthBar && passwordStrengthBar.parentNode.previousElementSibling) {
+                    const password = passwordInput.value;
+                    const strength = checkPasswordStrength(password);
+                    const strengthLabels = {
+                        'weak': t('register-script-password-strength-weak'),
+                        'fair': t('register-script-password-strength-fair'),
+                        'good': t('register-script-password-strength-good'),
+                        'strong': t('register-script-password-strength-strong')
+                    };
+                    passwordStrengthBar.parentNode.previousElementSibling.textContent = 
+                        strengthLabels[strength] || t('register-script-password-strength-weak');
+                }
+            };
+        });
+    </script>
+</body>
+
+</html>
