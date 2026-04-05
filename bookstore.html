@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>懒得起名小书铺 - 在线智能书店</title>
-    <link rel="stylesheet" href="style.css?v=20260401-4">
+    <link rel="stylesheet" href="style.css?v=20260401-2">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
     <style>
@@ -12,6 +12,7 @@
         .hero { padding: 60px 0; }
         .book-sample { max-width: 720px; margin: 30px auto; }
     </style>
+    <script src="i18n.js"></script>
 </head>
 <body>
     <!-- 导航栏 -->
@@ -19,12 +20,12 @@
         <div class="container">
             <nav class="navbar">
                 <div class="logo">
-                    <h1><i class="fas fa-book-open"></i> 懒得起名小书铺</h1>
-                    <p class="tagline">智能推荐 · 悦读无限</p>
+                    <h1><i class="fas fa-book-open"></i> <span data-i18n="nav-logo">懒得起名小书铺</span></h1>
+                    <p class="tagline" data-i18n="nav-tagline">智能推荐 · 悦读无限</p>
                 </div>
                 
                 <div class="search-bar">
-                    <input type="text" id="search-input" placeholder="搜索书名、作者或关键词...">
+                    <input type="text" id="search-input" placeholder="搜索书名、作者或关键词..." data-i18n-placeholder="search-placeholder">
                     <button id="search-btn"><i class="fas fa-search"></i></button>
                     <div class="search-suggestions">
                         <div class="suggestion-item" data-search="人工智能">人工智能</div>
@@ -35,18 +36,19 @@
                 </div>
                 
                 <div class="nav-links">
-                    <a href="#home" class="nav-link active"><i class="fas fa-home"></i> 首页</a>
-                    <a href="#books" class="nav-link"><i class="fas fa-book"></i> 图书</a>
-                    <a href="#recommendations" class="nav-link"><i class="fas fa-star"></i> 智能推荐</a>
+                    <a href="#home" class="nav-link active"><i class="fas fa-home"></i><span data-i18n="nav-home">首页</span></a>
+                    <a href="#books" class="nav-link"><i class="fas fa-book"></i><span data-i18n="nav-books">图书</span></a>
+                    <a href="#recommendations" class="nav-link"><i class="fas fa-star"></i><span data-i18n="nav-recommend">智能推荐</span></a>
+                    <a href="#" id="lang-toggle-btn" class="nav-link" style="font-weight: bold; color: var(--accent-color);">EN</a>
                     <div class="dropdown">
-                        <a href="#" class="nav-link" id="account-nav-link"><i class="fas fa-user"></i> 我的账户（<span id="user-mode-badge">未登录</span>） <i class="fas fa-chevron-down"></i></a>
+                        <a href="#" class="nav-link" id="account-nav-link"><i class="fas fa-user"></i><span data-i18n="nav-account">我的账户</span>（<span id="user-mode-badge" data-i18n="nav-not-logged-in">未登录</span>） <i class="fas fa-chevron-down"></i></a>
                         <div class="dropdown-content">
-                            <a href="#" id="my-favorites-link"><i class="fas fa-heart"></i> 我的收藏</a>
-                            <a href="#" id="my-orders-link"><i class="fas fa-box"></i> 订单查询</a>
-                            <a href="#" id="my-history-link"><i class="fas fa-history"></i> 浏览历史</a>
-                            <a href="#" id="my-system-messages-link"><i class="fas fa-bell"></i> 系统消息 <span id="system-messages-unread-badge" class="system-message-unread-badge" hidden>0</span></a>
-                            <a href="account.html" id="account-settings-link"><i class="fas fa-cog"></i> 账户设置</a>
-                            <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> 退出登录</a>
+                            <a href="#" id="my-favorites-link"><i class="fas fa-heart"></i> <span data-i18n="nav-favorites">我的收藏</span></a>
+                            <a href="#" id="my-orders-link"><i class="fas fa-box"></i> <span data-i18n="nav-orders">订单查询</span></a>
+                            <a href="#" id="my-history-link"><i class="fas fa-history"></i> <span data-i18n="nav-history">浏览历史</span></a>
+                            <a href="#" id="my-system-messages-link"><i class="fas fa-bell"></i> <span data-i18n="nav-system-messages">系统消息</span> <span id="system-messages-unread-badge" class="system-message-unread-badge" hidden>0</span></a>
+                            <a href="account.html" id="account-settings-link"><i class="fas fa-cog"></i> <span data-i18n="nav-account-settings">账户设置</span></a>
+                            <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> <span data-i18n="nav-logout">退出登录</span></a>
                         </div>
                     </div>
                     <a href="#cart" class="nav-link cart-icon">
@@ -68,11 +70,11 @@
         <section class="hero" id="home">
             <div class="container">
                 <div class="hero-content">
-                    <h2>发现属于你的下一本好书</h2>
-                    <p>基于AI智能推荐算法，根据您的阅读喜好个性化推荐书籍，让阅读更加精准有趣。</p>
+                   <h2 data-i18n="hero-title">发现属于你的下一本好书</h2>
+                   <p data-i18n="hero-subtitle">基于AI智能推荐算法，根据您的阅读喜好个性化推荐书籍，让阅读更加精准有趣。</p>
                     <div class="hero-buttons">
-                        <a href="#books" class="btn btn-primary">浏览图书</a>
-                        <a href="#recommendations" class="btn btn-secondary">查看推荐</a>
+                        <a href="#books" class="btn btn-primary" data-i18n="hero-btn-explore">浏览图书</a>
+                        <a href="#recommendations" class="btn btn-secondary" data-i18n="hero-btn-AI">查看推荐</a>
                     </div>
                 </div>
                 <div class="hero-image">
@@ -88,44 +90,44 @@
         <!-- 特色功能展示 -->
         <section class="features paper-section">
             <div class="container">
-                <h2 class="section-title">平台特色功能</h2>
-                <p class="section-subtitle">集成人工智能技术，提供卓越的在线购书体验</p>
+                <h2 class="section-title" data-i18n="features-title">平台特色功能</h2>
+                <p class="section-subtitle" data-i18n="features-subtitle">集成人工智能技术，提供卓越的在线购书体验</p>
                 
                 <div class="features-grid">
                     <div class="feature-card">
                         <div class="feature-icon">
                             <i class="fas fa-robot"></i>
                         </div>
-                        <h3>AI智能推荐</h3>
-                        <p>基于协同过滤算法和用户行为分析，为您推荐最可能感兴趣的书籍。</p>
-                        <a href="#" class="feature-link">了解更多 <i class="fas fa-arrow-right"></i></a>
+                        <h3 data-i18n="feature-ai-title">AI智能推荐</h3>
+                        <p data-i18n="feature-ai-desc">基于协同过滤算法和用户行为分析，为您推荐最可能感兴趣的书籍。</p>
+                        <a href="#" class="feature-link"><span data-i18n="feature-learn-more">了解更多</span> <i class="fas fa-arrow-right"></i></a>
                     </div>
                     
                     <div class="feature-card">
                         <div class="feature-icon">
                             <i class="fas fa-search-plus"></i>
                         </div>
-                        <h3>智能搜索</h3>
-                        <p>支持多属性关键词搜索，可根据分类、价格、标签等多维度筛选书籍。</p>
-                        <a href="#" class="feature-link">了解更多 <i class="fas fa-arrow-right"></i></a>
+                        <h3 data-i18n="feature-search-title">智能搜索</h3>
+                        <p data-i18n="feature-search-desc">支持多属性关键词搜索，可根据分类、价格、标签等多维度筛选书籍。</p>
+                        <a href="#" class="feature-link"><span data-i18n="feature-learn-more">了解更多</span> <i class="fas fa-arrow-right"></i></a>
                     </div>
                     
                     <div class="feature-card">
                         <div class="feature-icon">
                             <i class="fas fa-comments"></i>
                         </div>
-                        <h3>用户社区</h3>
-                        <p>书评、评分和讨论区，让读者分享阅读体验，发现更多好书。</p>
-                        <a href="#" class="feature-link">了解更多 <i class="fas fa-arrow-right"></i></a>
+                        <h3 data-i18n="feature-community-title">用户社区</h3>
+                        <p data-i18n="feature-community-desc">书评、评分和讨论区，让读者分享阅读体验，发现更多好书。</p>
+                        <a href="#" class="feature-link"><span data-i18n="feature-learn-more">了解更多</span> <i class="fas fa-arrow-right"></i></a>
                     </div>
                     
                     <div class="feature-card">
                         <div class="feature-icon">
                             <i class="fas fa-shield-alt"></i>
                         </div>
-                        <h3>安全交易</h3>
-                        <p>采用高级加密技术和安全支付，保护您的个人信息和交易安全。</p>
-                        <a href="#" class="feature-link">了解更多 <i class="fas fa-arrow-right"></i></a>
+                        <h3 data-i18n="feature-security-title">安全交易</h3>
+                        <p data-i18n="feature-security-desc">采用高级加密技术和安全支付，保护您的个人信息和交易安全。</p>
+                        <a href="#" class="feature-link"><span data-i18n="feature-learn-more">了解更多</span> <i class="fas fa-arrow-right"></i></a>
                     </div>
                 </div>
             </div>
@@ -135,13 +137,13 @@
         <section class="books-section paper-section" id="books">
             <div class="container">
                 <div class="section-header">
-                    <h2 class="section-title">热门图书</h2>
+                    <h2 class="section-title" data-i18n="books-section-title">热门图书</h2>
                     <div class="section-filter">
-                        <button class="filter-btn active" data-filter="all">全部</button>
-                        <button class="filter-btn" data-filter="fiction">小说文学</button>
-                        <button class="filter-btn" data-filter="nonfiction">非虚构</button>
-                        <button class="filter-btn" data-filter="academic">学术</button>
-                        <button class="filter-btn" data-filter="children">儿童读物</button>
+                        <button class="filter-btn active" data-filter="all" data-i18n="books-filter-all">全部</button>
+                        <button class="filter-btn" data-filter="fiction" data-i18n="books-filter-fiction">小说文学</button>
+                        <button class="filter-btn" data-filter="nonfiction" data-i18n="books-filter-nonfiction">非虚构</button>
+                        <button class="filter-btn" data-filter="academic" data-i18n="books-filter-academic">学术</button>
+                        <button class="filter-btn" data-filter="children" data-i18n="books-filter-children">儿童读物</button>
                     </div>
                 </div>
                 
@@ -152,7 +154,7 @@
                 <div class="pagination"></div>
                 
                 <div class="section-footer">
-                    <a href="#" class="btn btn-outline">浏览更多图书 <i class="fas fa-arrow-right"></i></a>
+                    <a href="#" class="btn btn-outline"><span data-i18n="books-browse-more">浏览更多图书</span> <i class="fas fa-arrow-right"></i></a>
                 </div>
             </div>
         </section>
@@ -160,17 +162,17 @@
         <!-- AI推荐区域 -->
         <section class="recommendations paper-section" id="recommendations">
             <div class="container">
-                <h2 class="section-title">为您推荐</h2>
-                <p class="section-subtitle">基于您的浏览历史和偏好，AI为您精心挑选</p>
+                <h2 class="section-title" data-i18n="recommendations-title">为您推荐</h2>
+                <p class="section-subtitle" data-i18n="recommendations-subtitle">基于您的浏览历史和偏好，AI为您精心挑选</p>
                 
                 <div class="recommendations-grid">
                     <!-- 推荐图书将通过JavaScript动态生成 -->
                 </div>
                 
                 <div class="recommendation-refresh">
-                    <p>推荐每10分钟更新一次，确保内容新鲜度</p>
+                    <p data-i18n="recommendations-refresh-info">推荐每10分钟更新一次，确保内容新鲜度</p>
                     <button class="btn btn-secondary" id="refresh-recommendations">
-                        <i class="fas fa-sync-alt"></i> 刷新推荐
+                        <i class="fas fa-sync-alt"></i> <span data-i18n="recommendations-refresh-btn">刷新推荐</span>
                     </button>
                 </div>
             </div>
@@ -179,7 +181,7 @@
         <!-- 购物车侧边栏 -->
         <aside class="cart-sidebar" id="cart">
             <div class="cart-header">
-                <h3><i class="fas fa-shopping-cart"></i> 购物车</h3>
+                <h3><i class="fas fa-shopping-cart"></i> <span data-i18n="cart-title">购物车</span></h3>
                 <button class="close-cart" id="close-cart">
                     <i class="fas fa-times"></i>
                 </button>
@@ -191,18 +193,18 @@
             
             <div class="cart-footer">
                 <div class="cart-total">
-                    <span>总计：</span>
+                    <span data-i18n="cart-total-label">总计：</span>
                     <span class="total-price">¥ 0.00</span>
                 </div>
-                <button class="btn btn-primary btn-block" id="checkout-btn" type="button">前往结算</button>
-                <button class="btn btn-outline btn-block" id="clear-cart">清空购物车</button>
+                <button class="btn btn-primary btn-block" id="checkout-btn" type="button" data-i18n="cart-checkout-btn">前往结算</button>
+                <button class="btn btn-outline btn-block" id="clear-cart" data-i18n="cart-clear-btn">清空购物车</button>
             </div>
         </aside>
 
         <!-- 收藏侧边栏 -->
         <aside class="cart-sidebar" id="favorites-sidebar">
             <div class="cart-header">
-                <h3><i class="fas fa-heart"></i> 我的收藏</h3>
+                <h3><i class="fas fa-heart"></i> <span data-i18n="favorites-title">我的收藏</span></h3>
                 <button class="close-cart" id="close-favorites">
                     <i class="fas fa-times"></i>
                 </button>
@@ -214,7 +216,7 @@
 
             <div class="cart-footer">
                 <div class="cart-total">
-                    <span>已收藏：</span>
+                    <span data-i18n="favorites-count-label">已收藏：</span>
                     <span class="favorites-count">0 本</span>
                 </div>
             </div>
@@ -222,7 +224,7 @@
 
         <aside class="cart-sidebar" id="orders-sidebar">
             <div class="cart-header">
-                <h3><i class="fas fa-box"></i> 我的订单</h3>
+                <h3><i class="fas fa-box"></i> <span data-i18n="orders-title">我的订单</span></h3>
                 <button class="close-cart" id="close-orders">
                     <i class="fas fa-times"></i>
                 </button>
@@ -234,7 +236,7 @@
 
             <div class="cart-footer">
                 <div class="cart-total">
-                    <span>订单数：</span>
+                    <span data-i18n="orders-count-label">订单数：</span>
                     <span class="orders-count">0 单</span>
                 </div>
             </div>
@@ -242,7 +244,7 @@
 
         <aside class="cart-sidebar" id="history-sidebar">
             <div class="cart-header">
-                <h3><i class="fas fa-history"></i> 浏览历史</h3>
+                <h3><i class="fas fa-history"></i> <span data-i18n="history-title">浏览历史</span></h3>
                 <button class="close-cart" id="close-history">
                     <i class="fas fa-times"></i>
                 </button>
@@ -254,16 +256,16 @@
 
             <div class="cart-footer">
                 <div class="cart-total">
-                    <span>历史记录：</span>
+                    <span data-i18n="history-count-label">历史记录：</span>
                     <span class="history-count">0 条</span>
                 </div>
-                <button class="btn btn-outline btn-block" id="clear-history">清空历史</button>
+                <button class="btn btn-outline btn-block" id="clear-history" data-i18n="history-clear-btn">清空历史</button>
             </div>
         </aside>
 
         <aside class="cart-sidebar" id="system-messages-sidebar">
             <div class="cart-header">
-                <h3><i class="fas fa-bell"></i> 系统消息</h3>
+                <h3><i class="fas fa-bell"></i> <span data-i18n="system-messages-title">系统消息</span></h3>
                 <button class="close-cart" id="close-system-messages">
                     <i class="fas fa-times"></i>
                 </button>
@@ -275,7 +277,7 @@
 
             <div class="cart-footer">
                 <div class="cart-total">
-                    <span>消息数：</span>
+                    <span data-i18n="system-messages-count-label">消息数：</span>
                     <span class="system-messages-count">0 条</span>
                 </div>
             </div>
@@ -290,8 +292,8 @@
         <div class="container">
             <div class="footer-content">
                 <div class="footer-section">
-                    <h3><i class="fas fa-book-open"></i> 懒得起名小书铺</h3>
-                    <p>一个由AI驱动的智能在线书店，致力于为读者提供个性化、便捷的购书体验。</p>
+                    <h3><i class="fas fa-book-open"></i> <span data-i18n="footer-brand-title">懒得起名小书铺</span></h3>
+                    <p data-i18n="footer-brand-desc">一个由AI驱动的智能在线书店，致力于为读者提供个性化、便捷的购书体验。</p>
                     <div class="social-icons">
                         <a href="#"><i class="fab fa-weixin"></i></a>
                         <a href="#"><i class="fab fa-weibo"></i></a>
@@ -301,46 +303,46 @@
                 </div>
                 
                 <div class="footer-section">
-                    <h4>快速链接</h4>
+                    <h4 data-i18n="footer-quick-links-title">快速链接</h4>
                     <ul>
-                        <li><a href="#home">首页</a></li>
-                        <li><a href="#books">所有图书</a></li>
-                        <li><a href="#recommendations">智能推荐</a></li>
-                        <li><a href="#">畅销榜单</a></li>
-                        <li><a href="#">最新上架</a></li>
+                        <li><a href="#home" data-i18n="footer-link-home">首页</a></li>
+                        <li><a href="#books" data-i18n="footer-link-books">所有图书</a></li>
+                        <li><a href="#recommendations" data-i18n="footer-link-recommendations">智能推荐</a></li>
+                        <li><a href="#" data-i18n="footer-link-bestsellers">畅销榜单</a></li>
+                        <li><a href="#" data-i18n="footer-link-new-arrivals">最新上架</a></li>
                     </ul>
                 </div>
                 
                 <div class="footer-section">
-                    <h4>用户服务</h4>
+                    <h4 data-i18n="footer-service-title">用户服务</h4>
                     <ul>
-                        <li><a href="#">我的账户</a></li>
-                        <li><a href="#">订单查询</a></li>
-                        <li><a href="#">帮助中心</a></li>
-                        <li><a href="#">联系我们</a></li>
-                        <li><a href="#">隐私政策</a></li>
+                        <li><a href="#" data-i18n="footer-service-account">我的账户</a></li>
+                        <li><a href="#" data-i18n="footer-service-orders">订单查询</a></li>
+                        <li><a href="#" data-i18n="footer-service-help">帮助中心</a></li>
+                        <li><a href="#" data-i18n="footer-service-contact">联系我们</a></li>
+                        <li><a href="#" data-i18n="footer-service-privacy">隐私政策</a></li>
                     </ul>
                 </div>
                 
                 <div class="footer-section">
-                    <h4>项目信息</h4>
-                    <p>CSAI3124课程项目 - 在线智能书店</p>
-                    <p>开发团队：张徐瑞(项目经理)、吴军浩、吴莹莹、张玥冉、卢卓谦</p>
-                    <p>指导老师：[教师姓名]</p>
-                    <p>2025/2026学年</p>
+                    <h4 data-i18n="footer-project-title">项目信息</h4>
+                    <p data-i18n="footer-project-desc-1">CSAI3124课程项目 - 在线智能书店</p>
+                    <p data-i18n="footer-project-desc-2">开发团队：张徐瑞(项目经理)、吴军浩、吴莹莹、张玥冉、卢卓谦</p>
+                    <p data-i18n="footer-project-desc-3">指导老师：[教师姓名]</p>
+                    <p data-i18n="footer-project-desc-4">2025/2026学年</p>
                 </div>
             </div>
             
             <div class="footer-bottom">
-                <p>&copy; 2025-2026 懒得起名小书铺 - 在线智能书店. 保留所有权利. 本网站仅为课程项目演示.</p>
-                <p class="security-info"><i class="fas fa-lock"></i> 本网站采用HTTPS加密传输，符合OWASP安全标准</p>
+                <p data-i18n="footer-copyright">&copy; 2025-2026 懒得起名小书铺 - 在线智能书店. 保留所有权利. 本网站仅为课程项目演示.</p>
+                <p class="security-info"><i class="fas fa-lock"></i> <span data-i18n="footer-security">本网站采用HTTPS加密传输，符合OWASP安全标准</span></p>
             </div>
         </div>
     </footer>
 
     <!-- Supabase client (for fetching cloud data) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
-    <script src="script.js?v=20260401-4"></script>
+    <script src="script.js?v=20260401-2"></script>
 </body>
 
 </html>
