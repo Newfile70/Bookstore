@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="account-title">账户设置 - 懒得起名小书铺</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
+    <script src="i18n.js"></script>
+    <style>
+        .account-page { padding: 48px 0 72px; }
+        .account-layout { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
+        .account-panel { background: #fff; border-radius: 14px; box-shadow: var(--shadow); padding: 24px; }
+        .account-panel h2, .account-panel h3 { margin-bottom: 14px; }
+        .account-summary { display: grid; gap: 12px; }
+        .account-summary-item { color: var(--text-light); font-size: 14px; }
+        .account-grid { display: grid; gap: 24px; }
+        .account-form-grid { display: grid; gap: 14px; }
+        .account-form-grid input, .account-form-grid textarea { width: 100%; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 10px; font: inherit; }
+        .account-message { display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: 10px; font-size: 14px; }
+        .account-message.show { display: block; }
+        .account-message.success { background: rgba(40,167,69,.1); color: #1f7a35; }
+        .account-message.error { background: rgba(220,53,69,.1); color: #b42318; }
+        .account-message.info { background: rgba(23,162,184,.1); color: #0c7489; }
+        .address-list { display: grid; gap: 14px; }
+        .address-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; background: #fcfaf6; }
+        .address-card.default { border-color: var(--accent-color); box-shadow: 0 0 0 2px rgba(196,154,108,.15); }
+        .address-card-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 8px; }
+        .address-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+        .address-meta { color: var(--text-light); font-size: 14px; }
+        .inline-checkbox { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-light); }
+        .empty-state-lite { color: var(--text-light); font-size: 14px; padding: 12px 0; }
+        @media (max-width: 900px) {
+            .account-layout { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <nav class="navbar">
+                <div class="logo">
+                    <h1><i class="fas fa-book-open"></i> <span data-i18n="nav-logo">懒得起名小书铺</span></h1>
+                    <p class="tagline" data-i18n="nav-tagline">智能推荐 · 悦读无限</p>
+                </div>
+                <div class="nav-links">
+                    <a href="bookstore.html" class="nav-link"><i class="fas fa-arrow-left"></i> <span data-i18n="account-back-to-store">返回书店</span></a>
+                    <a href="#" class="nav-link active"><i class="fas fa-cog"></i> <span data-i18n="nav-account-settings">账户设置</span></a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <main class="account-page">
+        <div class="container">
+            <div class="account-layout">
+                <aside class="account-panel">
+                    <h2 data-i18n="account-overview-title">账户概览</h2>
+                    <div class="account-summary">
+                        <div class="account-summary-item"><span data-i18n="account-current-username">当前用户名</span>：<strong id="summary-username">-</strong></div>
+                        <div class="account-summary-item"><span data-i18n="account-email">邮箱</span>：<strong id="summary-email">-</strong></div>
+                        <div class="account-summary-item"><span data-i18n="account-default-address">默认地址</span>：<strong id="summary-address">-</strong></div>
+                    </div>
+                </aside>
+
+                <section class="account-grid">
+                    <div class="account-panel">
+                        <div id="account-message" class="account-message"></div>
+                        <h3 data-i18n="account-basic-info-title">基础信息</h3>
+                        <form id="username-form" class="account-form-grid">
+                            <label>
+                                <span class="form-label" data-i18n="account-username-label">用户名</span>
+                                <input type="text" id="account-username" data-i18n-placeholder="account-username-placeholder" placeholder="请输入新的用户名" required>
+                            </label>
+                            <label>
+                                <span class="form-label" data-i18n="account-email-label">邮箱</span>
+                                <input type="email" id="account-email" disabled>
+                            </label>
+                            <div>
+                                <button type="submit" class="btn btn-primary" data-i18n="account-save-username-btn">保存用户名</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div class="account-panel">
+                        <h3 data-i18n="account-address-management-title">收货地址管理</h3>
+                        <div id="address-list" class="address-list"></div>
+                        <hr style="margin:20px 0;border:none;border-top:1px solid var(--border-color);">
+                        <form id="address-form" class="account-form-grid">
+                            <label>
+                                <span class="form-label" data-i18n="account-recipient-label">收件人</span>
+                                <input type="text" id="address-recipient" data-i18n-placeholder="account-recipient-placeholder" placeholder="例如：张三" required>
+                            </label>
+                            <label>
+                                <span class="form-label" data-i18n="account-phone-label">联系电话</span>
+                                <input type="text" id="address-phone" data-i18n-placeholder="account-phone-placeholder" placeholder="例如：13800000000">
+                            </label>
+                            <label>
+                                <span class="form-label" data-i18n="account-address-label">详细地址</span>
+                                <textarea id="address-line" rows="3" data-i18n-placeholder="account-address-placeholder" placeholder="请输入完整的收货地址" required></textarea>
+                            </label>
+                            <label class="inline-checkbox">
+                                <input type="checkbox" id="address-default">
+                                <span data-i18n="account-set-default-address">设为默认收货地址</span>
+                            </label>
+                            <div>
+                                <button type="submit" class="btn btn-primary" data-i18n="account-add-address-btn">新增地址</button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        function t(key, fallback) {
+            return (window.translations && window.translations[currentLang] && window.translations[currentLang][key]) || fallback || key;
+        }
+
+        const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
+        const supabaseClient = (typeof supabase !== 'undefined' && supabase?.createClient)
+            ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+            : null;
+
+        const messageEl = document.getElementById('account-message');
+        const usernameForm = document.getElementById('username-form');
+        const addressForm = document.getElementById('address-form');
+        const addressList = document.getElementById('address-list');
+        const usernameInput = document.getElementById('account-username');
+        const emailInput = document.getElementById('account-email');
+        const summaryUsername = document.getElementById('summary-username');
+        const summaryEmail = document.getElementById('summary-email');
+        const summaryAddress = document.getElementById('summary-address');
+
+        let currentProfile = null;
+        let addressItems = [];
+        let currentAuthUser = null;
+        let usersSupportsShippingAddress = true;
+
+        function showMessage(message, type = 'info') {
+            if (!messageEl) return;
+            messageEl.textContent = message;
+            messageEl.className = `account-message show ${type}`;
+        }
+
+        function isMissingColumnError(error, columnName) {
+            const text = String(error?.message || error?.details || error?.hint || error || '').toLowerCase();
+            if (!text) return false;
+            return text.includes(`'${String(columnName).toLowerCase()}'`) && text.includes('column') && text.includes('users');
+        }
+
+        function buildWritableUserPayload(profileLike, includeShippingAddress = true) {
+            const payload = {
+                id: profileLike.id,
+                username: profileLike.username,
+                email: profileLike.email ?? null,
+                full_name: profileLike.full_name ?? null
+            };
+            if (includeShippingAddress) {
+                payload.shipping_address = profileLike.shipping_address ?? null;
+            }
+            return payload;
+        }
+
+        async function upsertUserProfileCompat(profileLike) {
+            const firstPayload = buildWritableUserPayload(profileLike, usersSupportsShippingAddress);
+            let { error } = await supabaseClient.from('users').upsert([firstPayload], { onConflict: 'id' });
+            if (!error) return;
+
+            if (usersSupportsShippingAddress && isMissingColumnError(error, 'shipping_address')) {
+                usersSupportsShippingAddress = false;
+                const fallbackPayload = buildWritableUserPayload(profileLike, false);
+                const retry = await supabaseClient.from('users').upsert([fallbackPayload], { onConflict: 'id' });
+                error = retry.error;
+            }
+
+            if (error) throw error;
+        }
+
+        async function updateUserProfileByUsernameCompat(username, profileLike) {
+            const firstPayload = {
+                id: profileLike.id,
+                email: profileLike.email ?? null,
+                full_name: profileLike.full_name ?? null,
+                shipping_address: profileLike.shipping_address ?? null
+            };
+
+            let response = await supabaseClient
+                .from('users')
+                .update(usersSupportsShippingAddress ? firstPayload : {
+                    id: firstPayload.id,
+                    email: firstPayload.email,
+                    full_name: firstPayload.full_name
+                })
+                .eq('username', username)
+                .select('*')
+                .maybeSingle();
+
+            if (response.error && usersSupportsShippingAddress && isMissingColumnError(response.error, 'shipping_address')) {
+                usersSupportsShippingAddress = false;
+                response = await supabaseClient
+                    .from('users')
+                    .update({ id: firstPayload.id, email: firstPayload.email, full_name: firstPayload.full_name })
+                    .eq('username', username)
+                    .select('*')
+                    .maybeSingle();
+            }
+
+            if (response.error) throw response.error;
+            return response.data || null;
+        }
+
+        async function updateUserShippingAddressCompat(userId, addressLine) {
+            if (!userId || !usersSupportsShippingAddress) return;
+            let response = await supabaseClient
+                .from('users')
+                .update({ shipping_address: addressLine || null })
+                .eq('id', userId);
+
+            if (response.error && isMissingColumnError(response.error, 'shipping_address')) {
+                usersSupportsShippingAddress = false;
+                return;
+            }
+            if (response.error) throw response.error;
+        }
+
+        function getLoginUsername() {
+            return String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim();
+        }
+
+        function ensureUserMode() {
+            const loggedIn = sessionStorage.getItem('loggedIn') === 'true';
+            const userType = sessionStorage.getItem('userType');
+            if (!loggedIn || userType === 'guest' || userType === 'merchant') {
+                alert(t('account-login-required', '请先以普通用户身份登录后再使用账户设置。'));
+                window.location.replace('index.html');
+                return false;
+            }
+            return true;
+        }
+
+        async function getCurrentSupabaseUserId() {
+            if (!supabaseClient?.auth?.getUser) return null;
+            try {
+                const { data, error } = await supabaseClient.auth.getUser();
+                if (error) return null;
+                return data?.user?.id || null;
+            } catch {
+                return null;
+            }
+        }
+
+        async function getCurrentSupabaseUser() {
+            if (!supabaseClient?.auth?.getUser) return null;
+            try {
+                const { data, error } = await supabaseClient.auth.getUser();
+                if (error) return null;
+                return data?.user || null;
+            } catch {
+                return null;
+            }
+        }
+
+        function buildProfileSeed(authUser, loginUsername, existingProfile = null) {
+            return {
+                id: authUser.id,
+                username: String(
+                    existingProfile?.username ||
+                    loginUsername ||
+                    authUser.user_metadata?.username ||
+                    authUser.user_metadata?.name ||
+                    authUser.email?.split('@')[0] ||
+                    ''
+                ).trim(),
+                email: authUser.email || existingProfile?.email || null,
+                full_name: existingProfile?.full_name || authUser.user_metadata?.full_name || authUser.user_metadata?.name || null,
+                shipping_address: usersSupportsShippingAddress ? (existingProfile?.shipping_address || null) : undefined
+            };
+        }
+
+        async function ensureProfileExistsFromAuth(authUser, loginUsername, existingProfile = null) {
+            if (!authUser?.id) return null;
+            const profile = buildProfileSeed(authUser, loginUsername, existingProfile);
+
+            if (!profile.username) return null;
+
+            await upsertUserProfileCompat(profile);
+
+            const { data, error: reloadError } = await supabaseClient
+                .from('users')
+                .select('*')
+                .eq('id', authUser.id)
+                .maybeSingle();
+
+            if (reloadError) throw reloadError;
+            return data || null;
+        }
+
+        async function alignProfileWithAuth(authUser, profile, loginUsername) {
+            if (!authUser?.id) return profile;
+            if (profile?.id && String(profile.id) === String(authUser.id)) return profile;
+
+            const nextProfile = buildProfileSeed(authUser, loginUsername, profile);
+
+            if (profile?.username) {
+                try {
+                    const data = await updateUserProfileByUsernameCompat(profile.username, {
+                        id: authUser.id,
+                        email: nextProfile.email,
+                        full_name: nextProfile.full_name,
+                        shipping_address: nextProfile.shipping_address
+                    });
+                    if (data) {
+                        return data;
+                    }
+                } catch (e) {
+                    console.warn('Align profile by username failed:', e);
+                }
+            }
+
+            return ensureProfileExistsFromAuth(authUser, loginUsername, profile);
+        }
+
+        function getProfileOwnerId() {
+            return currentAuthUser?.id || currentProfile?.id || null;
+        }
+
+        async function resolveCurrentProfile() {
+            const authUser = await getCurrentSupabaseUser();
+            currentAuthUser = authUser;
+            const userId = authUser?.id || null;
+            const loginUsername = getLoginUsername();
+            let data = null;
+
+            if (userId) {
+                const { data: byId, error } = await supabaseClient.from('users').select('*').eq('id', userId).maybeSingle();
+                if (error) throw error;
+                data = byId || null;
+            }
+
+            if (!data && loginUsername) {
+                const { data: byUsername, error } = await supabaseClient.from('users').select('*').eq('username', loginUsername).maybeSingle();
+                if (error) throw error;
+                data = byUsername || null;
+            }
+
+            if (!data && authUser) {
+                data = await ensureProfileExistsFromAuth(authUser, loginUsername);
+            }
+
+            if (data && authUser && String(data.id || '') !== String(authUser.id)) {
+                data = await alignProfileWithAuth(authUser, data, loginUsername);
+            }
+
+            if (!data) {
+                throw new Error(t('account-script-error-demo-account'));
+            }
+
+            currentProfile = data;
+            return data;
+        }
+
+        async function loadAddresses() {
+            addressItems = [];
+            const ownerId = getProfileOwnerId();
+            if (!ownerId) return [];
+            const { data, error } = await supabaseClient
+                .from('user_addresses')
+                .select('*')
+                .eq('user_id', ownerId);
+            if (error) throw error;
+            addressItems = Array.isArray(data) ? data.slice().sort((a, b) => Number(b.is_default) - Number(a.is_default) || new Date(b.created_at || 0) - new Date(a.created_at || 0)) : [];
+            if (!addressItems.length && currentProfile.shipping_address) {
+                addressItems = [{ id: 'profile-default', recipient_name: currentProfile.full_name || currentProfile.username || '默认联系人', phone: '', address_line: currentProfile.shipping_address, is_default: true }];
+            }
+            return addressItems;
+        }
+
+        function renderProfile() {
+            usernameInput.value = currentProfile?.username || '';
+            emailInput.value = currentProfile?.email || '';
+            summaryUsername.textContent = currentProfile?.username || '-';
+            summaryEmail.textContent = currentProfile?.email || '-';
+            const defaultAddress = addressItems.find(item => item.is_default) || addressItems[0];
+            summaryAddress.textContent = defaultAddress?.address_line || currentProfile?.shipping_address || '-';
+        }
+
+        function renderAddressList() {
+            addressList.innerHTML = '';
+            if (!addressItems.length) {
+                addressList.innerHTML = '<div class="empty-state-lite">' + t('account-script-no-addresses') + '</div>';
+                return;
+            }
+
+            addressItems.forEach(item => {
+                const card = document.createElement('div');
+                card.className = `address-card ${item.is_default ? 'default' : ''}`;
+                card.innerHTML = `
+                    <div class="address-card-header">
+                        <strong>${item.recipient_name || t('account-script-default-contact')}</strong>
+                        ${item.is_default ? '<span class="admin-chip">' + t('account-script-default-address') + '</span>' : ''}
+                    </div>
+                    <div class="address-meta">${t('account-script-phone-label')}${item.phone || '-'}</div>
+                    <div style="margin-top:6px;">${item.address_line || '-'}</div>
+                    <div class="address-actions">
+                        ${item.id !== 'profile-default' && !item.is_default ? `<button class="btn btn-outline set-default-btn" data-id="${item.id}">` + t('account-script-set-default') + `</button>` : ''}
+                        ${item.id !== 'profile-default' ? `<button class="btn btn-outline delete-address-btn" data-id="${item.id}">` + t('account-script-delete') + `</button>` : ''}
+                    </div>
+                `;
+                addressList.appendChild(card);
+            });
+
+            addressList.querySelectorAll('.set-default-btn').forEach(btn => btn.addEventListener('click', async function() {
+                await setDefaultAddress(this.dataset.id);
+            }));
+            addressList.querySelectorAll('.delete-address-btn').forEach(btn => btn.addEventListener('click', async function() {
+                await deleteAddress(this.dataset.id);
+            }));
+        }
+
+        async function syncDefaultAddressToProfile(addressLine) {
+            const ownerId = getProfileOwnerId();
+            if (!ownerId) return;
+            const { error } = await supabaseClient
+                .from('users')
+                .update({ shipping_address: addressLine || null })
+                .eq('id', ownerId);
+            if (error) {
+                if (isMissingColumnError(error, 'shipping_address')) {
+                    usersSupportsShippingAddress = false;
+                } else {
+                    throw error;
+                }
+            } else {
+                currentProfile.shipping_address = addressLine || null;
+            }
+            currentProfile.id = ownerId;
+        }
+
+        async function setDefaultAddress(addressId) {
+            const ownerId = getProfileOwnerId();
+            if (!ownerId) return;
+            const target = addressItems.find(item => String(item.id) === String(addressId));
+            if (!target) return;
+            const currentDefaults = addressItems.filter(item => item.id !== 'profile-default');
+            for (const item of currentDefaults) {
+                const { error } = await supabaseClient
+                    .from('user_addresses')
+                    .update({ is_default: String(item.id) === String(addressId) })
+                    .eq('id', item.id);
+                if (error) throw error;
+            }
+            await syncDefaultAddressToProfile(target.address_line || '');
+            await refreshPageData(t('account-script-default-updated'));
+        }
+
+        async function deleteAddress(addressId) {
+            const target = addressItems.find(item => String(item.id) === String(addressId));
+            if (!target) return;
+            const { error } = await supabaseClient.from('user_addresses').delete().eq('id', addressId);
+            if (error) throw error;
+
+            const remaining = addressItems.filter(item => String(item.id) !== String(addressId) && item.id !== 'profile-default');
+            if (target.is_default) {
+                if (remaining[0]) {
+                    await setDefaultAddress(remaining[0].id);
+                    return;
+                }
+                await syncDefaultAddressToProfile('');
+            }
+            await refreshPageData(t('account-script-address-deleted'));
+        }
+
+        async function refreshPageData(message) {
+            await resolveCurrentProfile();
+            await loadAddresses();
+            renderProfile();
+            renderAddressList();
+            if (message) showMessage(message, 'success');
+        }
+
+        usernameForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const nextUsername = usernameInput.value.trim();
+            if (!nextUsername) {
+                showMessage(t('account-script-username-empty'), 'error');
+                return;
+            }
+            try {
+                const { error } = await supabaseClient
+                    .from('users')
+                    .update({ username: nextUsername })
+                    .eq('id', currentProfile.id);
+                if (error) throw error;
+                const oldLoginUsername = getLoginUsername();
+                sessionStorage.setItem('loginUsername', nextUsername);
+                if (sessionStorage.getItem('username') === oldLoginUsername) {
+                    sessionStorage.setItem('username', nextUsername);
+                }
+                if (localStorage.getItem('rememberedUser') === oldLoginUsername) {
+                    localStorage.setItem('rememberedUser', nextUsername);
+                }
+                await refreshPageData(t('account-script-username-updated'));
+            } catch (error) {
+                showMessage(t('account-script-username-update-failed') + (error.message || t('account-script-generic-error')), 'error');
+            }
+        });
+
+        addressForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const ownerId = getProfileOwnerId();
+            if (!ownerId) {
+                showMessage(t('account-script-no-user-id'), 'error');
+                return;
+            }
+            const recipientName = document.getElementById('address-recipient').value.trim();
+            const phone = document.getElementById('address-phone').value.trim();
+            const addressLine = document.getElementById('address-line').value.trim();
+            const isDefault = document.getElementById('address-default').checked || !addressItems.some(item => item.id !== 'profile-default');
+            if (!recipientName || !addressLine) {
+                showMessage(t('account-script-fill-required'), 'error');
+                return;
+            }
+
+            try {
+                if (isDefault) {
+                    const existing = addressItems.filter(item => item.id !== 'profile-default');
+                    for (const item of existing) {
+                        const { error: resetError } = await supabaseClient.from('user_addresses').update({ is_default: false }).eq('id', item.id);
+                        if (resetError) throw resetError;
+                    }
+                }
+
+                const { error } = await supabaseClient.from('user_addresses').insert([{
+                    user_id: ownerId,
+                    recipient_name: recipientName,
+                    phone: phone || null,
+                    address_line: addressLine,
+                    is_default: isDefault
+                }]);
+                if (error) throw error;
+                if (isDefault) {
+                    await syncDefaultAddressToProfile(addressLine);
+                }
+                addressForm.reset();
+                await refreshPageData(t('account-script-address-saved'));
+            } catch (error) {
+                showMessage(t('account-script-address-save-failed') + (error.message || t('account-script-generic-error')), 'error');
+            }
+        });
+
+        (async function init() {
+            if (!ensureUserMode()) return;
+            if (!supabaseClient) {
+                showMessage(t('account-script-no-supabase'), 'error');
+                return;
+            }
+            try {
+                await refreshPageData();
+            } catch (error) {
+                showMessage(t('account-script-load-failed') + (error.message || t('account-script-generic-error')), 'error');
+            }
+        })();
+
+        // 语言切换处理
+        window.onLanguageChanged = function(lang) {
+            // 重新渲染地址列表以更新动态文本
+            renderAddressList();
+        };
+    </script>
+    </script>
+</body>
+</html>
