@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>支付成功 - 懒得起名小书铺</title>
+    <title data-i18n="success-page-title">支付成功 - 懒得起名小书铺</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
+    <script src="i18n.js"></script>
     <style>
         .success-container {
             max-width: 500px;
@@ -60,8 +61,8 @@
         <div class="container">
             <div class="navbar" style="justify-content: center;">
                 <div class="logo">
-                    <h1><i class="fas fa-book-open"></i> 懒得起名小书铺</h1>
-                    <p class="tagline">智能推荐 · 悦读无限</p>
+                    <h1><i class="fas fa-book-open"></i> <span data-i18n="nav-logo">懒得起名小书铺</span></h1>
+                    <p class="tagline" data-i18n="nav-tagline">智能推荐 · 悦读无限</p>
                 </div>
             </div>
         </div>
@@ -73,23 +74,23 @@
                 <div class="success-icon">
                     <i class="fas fa-check-circle"></i>
                 </div>
-                <h1 class="success-title">支付成功</h1>
-                <p>感谢您的购买！</p>
+                <h1 class="success-title" data-i18n="success-title">支付成功</h1>
+                <p data-i18n="success-subtitle">感谢您的购买！</p>
                 <!-- 显示从支付页传递的金额 -->
                 <div class="success-amount" id="success-amount">¥0.00</div>
 <!-- 添加支付时间显示 -->
 <p class="payment-time" id="payment-time"></p>
-                <a href="bookstore.html" class="btn btn-secondary btn-order" id="view-order-btn"><i class="fas fa-receipt"></i> 查看订单详情</a>
+                <a href="bookstore.html" class="btn btn-secondary btn-order" id="view-order-btn"><i class="fas fa-receipt"></i> <span data-i18n="success-view-order-btn">查看订单详情</span></a>
                 <!-- 返回书店主页 -->
-                <a href="bookstore.html" class="btn btn-primary btn-home"><i class="fas fa-home"></i> 返回主页</a>
-                <p class="note">订单详情已发送至您的邮箱</p>
+                <a href="bookstore.html" class="btn btn-primary btn-home"><i class="fas fa-home"></i> <span data-i18n="success-back-home-btn">返回主页</span></a>
+                <p class="note" data-i18n="success-note">订单详情已发送至您的邮箱</p>
             </div>
         </div>
     </main>
 
     <footer class="footer" style="padding: 30px 0; margin-top: 60px;">
         <div class="container" style="text-align: center; color: rgba(255,255,255,0.7);">
-            <p>&copy; 2025-2026 懒得起名小书铺</p>
+            <p data-i18n="success-footer-copy">&copy; 2025-2026 懒得起名小书铺</p>
         </div>
     </footer>
 
@@ -109,17 +110,19 @@
 				: 'bookstore.html?openOrders=1';
 		}
 		const now = new Date();
-// 获取并格式化当前时间
-const formattedTime = now.toLocaleString('zh-CN', { 
-    year: 'numeric', 
-    month: '2-digit', 
-    day: '2-digit', 
-    hour: '2-digit', 
-    minute: '2-digit', 
-    second: '2-digit', 
-    hour12: false 
-}).replace(/\//g, '-'); // 将日期分隔符从 '/' 替换为 '-'，更符合中文习惯
-document.getElementById('payment-time').textContent = '支付时间：' + formattedTime;
+        const lang = localStorage.getItem('site_lang') || 'zh';
+        const locale = lang === 'en' ? 'en-US' : 'zh-CN';
+        const timeLabel = lang === 'en' ? 'Paid at: ' : '支付时间：';
+        const formattedTime = now.toLocaleString(locale, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        }).replace(/\//g, '-');
+        document.getElementById('payment-time').textContent = timeLabel + formattedTime;
     </script>
 </body>
 </html>

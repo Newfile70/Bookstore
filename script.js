@@ -1,7 +1,13 @@
 // script.js - 懒得起名小书铺交互脚本
 
 function t(key, fallback) {
-    return (window.translations && window.translations[currentLang] && window.translations[currentLang][key]) || fallback || key;
+    const lang = (typeof currentLang !== 'undefined' && currentLang)
+        ? currentLang
+        : (localStorage.getItem('site_lang') || 'zh');
+    const dict = (typeof translations !== 'undefined' && translations?.[lang])
+        ? translations[lang]
+        : (window.translations && window.translations[lang] ? window.translations[lang] : null);
+    return (dict && dict[key]) || fallback || key;
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
@@ -14,14 +20,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     const BOOKS_CACHE_KEY = 'bookstore_books_cache_v2';
     const ORDER_AUTO_RECEIVE_MS = 7 * 24 * 60 * 60 * 1000;
     const RECOMMENDATION_REFRESH_MS = 10 * 60 * 1000;
-    const ORDER_STATUS_LABELS = {
-        pending: t('order-status-pending'),
-        hold: t('order-status-hold'),
-        shipped: t('order-status-shipped'),
-        arrived: t('order-status-arrived'),
-        received: t('order-status-received'),
-        cancelled: t('order-status-cancelled')
-    };
+    function getOrderStatusLabel(status) {
+        const normalized = normalizeOrderStatus(status);
+        const keyMap = {
+            pending: 'order-status-pending',
+            hold: 'order-status-hold',
+            shipped: 'order-status-shipped',
+            arrived: 'order-status-arrived',
+            received: 'order-status-received',
+            cancelled: 'order-status-cancelled'
+        };
+        return t(keyMap[normalized] || '', status || '-');
+    }
     // Supabase configuration (替换为你提供的 URL 与 anon key)
     const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
@@ -94,7 +104,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     function formatOrderDate(value) {
-        return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-';
+        if (!value) return '-';
+        const locale = currentLang === 'en' ? 'en-US' : 'zh-CN';
+        return new Date(value).toLocaleString(locale, { hour12: false });
     }
 
     function safeParseJsonValue(value, fallback) {
@@ -167,13 +179,18 @@ document.addEventListener('DOMContentLoaded', async function() {
             photos,
             id: raw?.id ?? raw?._id ?? index + 1,
             title: raw?.title ?? raw?.name ?? '',
+            titleEn: raw?.title_en ?? raw?.titleEn ?? '',
             author: raw?.author ?? raw?.writer ?? '',
+            authorEn: raw?.author_en ?? raw?.authorEn ?? '',
             category: raw?.category ?? raw?.cat ?? 'all',
             price: parseFloat(raw?.price) || 0,
             rating: parseFloat(raw?.rating) || 0,
             description: raw?.description ?? raw?.desc ?? '',
+            descriptionEn: raw?.description_en ?? raw?.descriptionEn ?? '',
             tags: normalizeTextList(raw?.tags),
+            tagsEn: normalizeTextList(raw?.tags_en ?? raw?.tagsEn),
             publisher: raw?.publisher ?? '',
+            publisherEn: raw?.publisher_en ?? raw?.publisherEn ?? '',
             isbn: raw?.isbn ?? '',
             disabled: toBooleanFlag(raw?.disabled),
             color: raw?.color ?? '#b09d7b',
@@ -184,8 +201,44 @@ document.addEventListener('DOMContentLoaded', async function() {
                 ?? raw?.intro_html
                 ?? raw?.introduction_html
                 ?? raw?.detail_html
+                ?? '',
+            summaryHtmlEn: raw?.summary_html_en
+                ?? raw?.summaryHtmlEn
+                ?? raw?.summary_en
+                ?? raw?.summaryEn
                 ?? ''
         };
+    }
+
+    function isEnglishContentMode() {
+        const lang = (typeof window.currentLang === 'string' && window.currentLang)
+            ? window.currentLang
+            : (localStorage.getItem('site_lang') || 'zh');
+        return lang === 'en';
+    }
+
+    function getBookDisplayTitle(book) {
+        const zh = String(book?.title || '').trim();
+        const en = String(book?.titleEn ?? book?.title_en ?? '').trim();
+        return isEnglishContentMode() ? (en || zh || t('book-title-untitled', '未命名图书')) : (zh || en || t('book-title-untitled', '未命名图书'));
+    }
+
+    function getBookDisplayAuthor(book) {
+        const zh = String(book?.author || '').trim();
+        const en = String(book?.authorEn ?? book?.author_en ?? '').trim();
+        return isEnglishContentMode() ? (en || zh || t('book-author-unknown', '未知作者')) : (zh || en || t('book-author-unknown', '未知作者'));
+    }
+
+    function getBookDisplayDescription(book) {
+        const zh = String(book?.description || '').trim();
+        const en = String(book?.descriptionEn ?? book?.description_en ?? '').trim();
+        return isEnglishContentMode() ? (en || zh || t('book-description-empty', '暂无简介')) : (zh || en || t('book-description-empty', '暂无简介'));
+    }
+
+    function getBookDisplayTags(book) {
+        const zh = normalizeTextList(book?.tags);
+        const en = normalizeTextList(book?.tagsEn ?? book?.tags_en);
+        return isEnglishContentMode() ? (en.length ? en : zh) : (zh.length ? zh : en);
     }
 
     function normalizeOrderItem(rawItem) {
@@ -220,7 +273,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         return Number(stats.avg);
     }
 
-    function formatRatingValue(value, fallback = '暂无评分') {
+    function formatRatingValue(value, fallback = t('book-rating-none', '暂无评分')) {
         const numeric = Number(value);
         return Number.isFinite(numeric) && numeric > 0 ? numeric.toFixed(1) : fallback;
     }
@@ -231,7 +284,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         return Number.isFinite(rating) && rating > 0;
     }
 
-    function formatBookRating(book, fallback = '暂无评分') {
+    function formatBookRating(book, fallback = t('book-rating-none', '暂无评分')) {
         const aggregate = getBookAggregateRating(book?.id);
         if (Number.isFinite(aggregate) && aggregate > 0) return Number(aggregate).toFixed(1);
         return hasBookRating(book) ? Number(book.rating).toFixed(1) : fallback;
@@ -1227,9 +1280,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     function getOrderRemainingText(order) {
         if (normalizeOrderStatus(order?.status) !== 'arrived' || !order?.arrivedDate) return '';
         const remaining = ORDER_AUTO_RECEIVE_MS - (Date.now() - new Date(order.arrivedDate).getTime());
-        if (remaining <= 0) return '未确认收货，系统即将自动收货';
+        if (remaining <= 0) return t('order-auto-receive-soon', '未确认收货，系统即将自动收货');
         const days = Math.ceil(remaining / (24 * 60 * 60 * 1000));
-        return `未确认收货，还剩 ${days} 天自动收货`;
+        return t('order-auto-receive-remaining', '未确认收货，还剩 {days} 天自动收货').replace('{days}', String(days));
     }
 
     function shouldAutoReceiveOrder(order) {
@@ -1562,9 +1615,15 @@ document.addEventListener('DOMContentLoaded', async function() {
                         ...normalizedBook,
                         disabled: typeof book?.disabled !== 'undefined' ? book.disabled : cachedBook?.disabled ?? normalizedBook.disabled,
                         tags: normalizedBook.tags?.length ? normalizedBook.tags : cachedBook?.tags,
+                        tags_en: normalizedBook.tagsEn?.length ? normalizedBook.tagsEn : cachedBook?.tagsEn,
+                        title_en: normalizedBook.titleEn || cachedBook?.titleEn,
+                        author_en: normalizedBook.authorEn || cachedBook?.authorEn,
+                        description_en: normalizedBook.descriptionEn || cachedBook?.descriptionEn,
                         publisher: normalizedBook.publisher || cachedBook?.publisher,
+                        publisher_en: normalizedBook.publisherEn || cachedBook?.publisherEn,
                         isbn: normalizedBook.isbn || cachedBook?.isbn,
                         summary_html: normalizedBook.summaryHtml || cachedBook?.summaryHtml,
+                        summary_html_en: normalizedBook.summaryHtmlEn || cachedBook?.summaryHtmlEn,
                         photos: normalizedBook.photos?.length ? normalizedBook.photos : cachedBook?.photos,
                         cover_url: normalizedBook.coverUrl || cachedBook?.coverUrl
                     }, index);
@@ -2014,20 +2073,20 @@ document.addEventListener('DOMContentLoaded', async function() {
             const username = String(sessionStorage.getItem('username') || '').trim();
 
             if (!loggedIn) {
-                userModeBadge.textContent = '未登录';
+                userModeBadge.textContent = t('nav-not-logged-in', '未登录');
                 return;
             }
 
             if (userType === 'guest') {
-                userModeBadge.textContent = '游客';
+                userModeBadge.textContent = t('nav-guest', '游客');
                 return;
             }
 
             const preferredName = loginUsername || username;
             const displayName = preferredName.includes('@') ? preferredName.split('@')[0] : preferredName;
-            userModeBadge.textContent = displayName || '用户';
+            userModeBadge.textContent = displayName || t('nav-user-default', '用户');
         } catch (e) {
-            userModeBadge.textContent = '未登录';
+            userModeBadge.textContent = t('nav-not-logged-in', '未登录');
         }
     }
     
@@ -2072,7 +2131,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (!shouldOpenOrders) return;
 
         if (isGuestUser()) {
-            showNotification('游客无法查看订单，请登录后使用', 'info');
+            showNotification(t('orders-guest-login-required', '游客无法查看订单，请登录后使用'), 'info');
             return;
         }
 
@@ -2125,16 +2184,19 @@ document.addEventListener('DOMContentLoaded', async function() {
             bookCard.dataset.id = book.id;
             bookCard.dataset.category = book.category;
             const coverUrl = getBookBrowseCoverUrl(book);
+            const displayTitle = getBookDisplayTitle(book);
+            const displayAuthor = getBookDisplayAuthor(book);
+            const displayDescription = getBookDisplayDescription(book);
 
             bookCard.innerHTML = `
                 <div class="book-image" style="${getBookBrowseCoverStyle(book)}">
-                    ${coverUrl ? '' : `<span style="color: white; font-weight: 500;">${escapeHtml((book.title || '').substring(0, 10))}${(book.title || '').length > 10 ? '...' : ''}</span>`}
+                    ${coverUrl ? '' : `<span style="color: white; font-weight: 500;">${escapeHtml((displayTitle || '').substring(0, 10))}${(displayTitle || '').length > 10 ? '...' : ''}</span>`}
                 </div>
                 <div class="book-content">
                     <div class="book-category">${escapeHtml(getCategoryName(book.category))}</div>
-                    <h3 class="book-title">${escapeHtml(book.title || '未命名图书')}</h3>
-                    <p class="book-author">${escapeHtml(book.author || '未知作者')}</p>
-                    <p class="book-description">${escapeHtml(String(book.description || '').replace(/<[^>]+>/g, '').slice(0, 80) || '暂无简介')}</p>
+                    <h3 class="book-title">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h3>
+                    <p class="book-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
+                    <p class="book-description">${escapeHtml(String(displayDescription || '').replace(/<[^>]+>/g, '').slice(0, 80) || t('book-description-empty', '暂无简介'))}</p>
                     <div class="book-footer">
                         <div class="book-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
                         <div class="book-rating">
@@ -2272,6 +2334,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         recommendations.forEach(rec => {
             const book = findBookById(rec.bookId);
             if (!book) return;
+            const displayTitle = getBookDisplayTitle(book);
+            const displayAuthor = getBookDisplayAuthor(book);
+            const displayDescription = getBookDisplayDescription(book);
             
             const recommendationCard = document.createElement('div');
             recommendationCard.className = 'recommendation-card';
@@ -2281,9 +2346,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 <div class="recommendation-badge">AI推荐</div>
                 <p class="recommendation-reason"><i class="fas fa-lightbulb"></i> ${rec.reason}</p>
                 <div class="book-category">${getCategoryName(book.category)}</div>
-                <h3 class="book-title">${book.title}</h3>
-                <p class="book-author">${book.author}</p>
-                <p class="book-description">${book.description}</p>
+                <h3 class="book-title">${escapeHtml(displayTitle)}</h3>
+                <p class="book-author">${escapeHtml(displayAuthor)}</p>
+                <p class="book-description">${escapeHtml(displayDescription)}</p>
                 <div class="book-footer">
                     <div class="book-price">¥ ${book.price.toFixed(2)}</div>
                     <div class="book-rating">
@@ -2336,18 +2401,20 @@ document.addEventListener('DOMContentLoaded', async function() {
             const book = findBookById(item.bookId);
             if (!book) return;
             const coverUrl = getBookBrowseCoverUrl(book);
+            const displayTitle = getBookDisplayTitle(book);
+            const displayAuthor = getBookDisplayAuthor(book);
             
             const cartItem = document.createElement('div');
             cartItem.className = 'cart-item';
             cartItem.dataset.id = item.id;
             
             cartItem.innerHTML = `
-                <div class="cart-item-image cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" aria-label="查看《${escapeHtml(book.title || '未命名图书')}》详情" style="${getBookBrowseCoverStyle(book)}">
-                    ${coverUrl ? '' : `<span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((book.title || '图书').substring(0, 6))}...</span>`}
+                <div class="cart-item-image cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" aria-label="查看《${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}》详情" style="${getBookBrowseCoverStyle(book)}">
+                    ${coverUrl ? '' : `<span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((displayTitle || t('book-title-default', '图书')).substring(0, 6))}...</span>`}
                 </div>
                 <div class="cart-item-details">
-                    <h4 class="cart-item-title cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(book.title || '未命名图书')}</h4>
-                    <p class="cart-item-author cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(book.author || '未知作者')}</p>
+                    <h4 class="cart-item-title cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h4>
+                    <p class="cart-item-author cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
                     <div class="cart-item-meta cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" style="font-size:12px;color:var(--text-light);margin-bottom:8px;">点击查看详情</div>
                     <div class="cart-item-controls">
                         <div class="cart-item-quantity">
@@ -2415,21 +2482,23 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         if (!favoriteBooks.length) {
-            favoritesItemsContainer.innerHTML = '<div class="empty-cart"><p>暂无收藏图书</p></div>';
+            favoritesItemsContainer.innerHTML = `<div class="empty-cart"><p>${t('favorites-empty', '暂无收藏图书')}</p></div>`;
             return;
         }
 
         favoriteBooks.forEach(book => {
+            const displayTitle = getBookDisplayTitle(book);
+            const displayAuthor = getBookDisplayAuthor(book);
             const item = document.createElement('div');
             item.className = 'cart-item';
             item.dataset.id = book.id;
             item.innerHTML = `
                 <div class="cart-item-image" style="background-color: ${sanitizeColor(book.color)}">
-                    <span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((book.title || '图书').substring(0, 6))}...</span>
+                    <span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((displayTitle || t('book-title-default', '图书')).substring(0, 6))}...</span>
                 </div>
                 <div class="cart-item-details">
-                    <h4 class="cart-item-title">${escapeHtml(book.title || '未命名图书')}</h4>
-                    <p class="cart-item-author">${escapeHtml(book.author || '未知作者')}</p>
+                    <h4 class="cart-item-title">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h4>
+                    <p class="cart-item-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
                     <div class="cart-item-controls">
                         <div class="cart-item-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
                         <button class="remove-item remove-favorite" data-id="${book.id}" title="取消收藏">
@@ -2574,7 +2643,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
 
         if (!found) {
-            showNotification('未找到对应订单', 'info');
+            showNotification(t('order-not-found', '未找到对应订单'), 'info');
         }
     }
 
@@ -2602,7 +2671,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             ordersItemsContainer.appendChild(filterBar);
             const guestEmpty = document.createElement('div');
             guestEmpty.className = 'empty-cart';
-            guestEmpty.innerHTML = '<p>游客无法查看订单，请登录后使用</p>';
+            guestEmpty.innerHTML = `<p>${t('orders-guest-login-required', '游客无法查看订单，请登录后使用')}</p>`;
             ordersItemsContainer.appendChild(guestEmpty);
             return;
         }
@@ -2612,7 +2681,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (!userOrders.length) {
             const empty = document.createElement('div');
             empty.className = 'empty-cart';
-            empty.innerHTML = '<p>暂无订单记录</p>';
+            empty.innerHTML = `<p>${t('orders-empty', '暂无订单记录')}</p>`;
             ordersItemsContainer.appendChild(empty);
             bindOrdersFilterButtons();
             return;
@@ -2622,7 +2691,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (!filteredOrders.length) {
             const empty = document.createElement('div');
             empty.className = 'empty-cart';
-            empty.innerHTML = '<p>当前状态下暂无订单</p>';
+            empty.innerHTML = `<p>${t('orders-empty-filtered', '当前状态下暂无订单')}</p>`;
             ordersItemsContainer.appendChild(empty);
             bindOrdersFilterButtons();
             return;
@@ -2636,7 +2705,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             const itemsHtml = (order.items || []).length
                 ? `<ul style="margin:8px 0 0 18px;padding:0;">${order.items.map(product => `<li>${escapeHtml(product.title || '图书')} × ${Number(product.quantity || 0)}</li>`).join('')}</ul>`
-                : '<div style="margin-top:8px;color:var(--text-light);">该订单未记录商品明细</div>';
+                : `<div style="margin-top:8px;color:var(--text-light);">${t('order-items-missing', '该订单未记录商品明细')}</div>`;
             const canReceive = normalizeOrderStatus(order.status) === 'arrived';
             const isCancelled = normalizeOrderStatus(order.status) === 'cancelled';
             const remainingText = getOrderRemainingText(order);
@@ -2645,22 +2714,22 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             item.innerHTML = `
                 <div class="cart-item-details order-open-detail" data-order-id="${order.id}" role="button" tabindex="0" style="width:100%;cursor:pointer;">
-                    <h4 class="cart-item-title">订单号：${escapeHtml(order.poNumber || String(order.id))}</h4>
-                    <p class="cart-item-author">状态：${escapeHtml(ORDER_STATUS_LABELS[normalizeOrderStatus(order.status)] || order.status)}</p>
+                    <h4 class="cart-item-title">${t('order-number-label', '订单号：')}${escapeHtml(order.poNumber || String(order.id))}</h4>
+                    <p class="cart-item-author">${t('order-status-label', '状态：')}${escapeHtml(getOrderStatusLabel(order.status))}</p>
                     <div style="font-size:13px;color:var(--text-light);line-height:1.8;">
-                        <div>下单时间：${escapeHtml(formatOrderDate(order.purchaseDate))}</div>
-                        <div>订单金额：¥ ${Number(order.totalAmount || 0).toFixed(2)}</div>
-                        <div>收货地址：${escapeHtml(order.shippingAddress || '-')}</div>
-                        <div>发货时间：${escapeHtml(formatOrderDate(order.shipmentDate))}</div>
-                        <div>到货时间：${escapeHtml(formatOrderDate(order.arrivedDate))}</div>
-                        <div>收货时间：${escapeHtml(formatOrderDate(order.receivedDate))}</div>
-                        ${isCancelled && order.cancelDate ? `<div>取消时间：${escapeHtml(formatOrderDate(order.cancelDate))}</div>` : ''}
+                        <div>${t('order-time-label', '下单时间：')}${escapeHtml(formatOrderDate(order.purchaseDate))}</div>
+                        <div>${t('order-amount-label', '订单金额：')}¥ ${Number(order.totalAmount || 0).toFixed(2)}</div>
+                        <div>${t('order-address-label', '收货地址：')}${escapeHtml(order.shippingAddress || '-')}</div>
+                        <div>${t('order-shipped-time-label', '发货时间：')}${escapeHtml(formatOrderDate(order.shipmentDate))}</div>
+                        <div>${t('order-arrived-time-label', '到货时间：')}${escapeHtml(formatOrderDate(order.arrivedDate))}</div>
+                        <div>${t('order-received-time-label', '收货时间：')}${escapeHtml(formatOrderDate(order.receivedDate))}</div>
+                        ${isCancelled && order.cancelDate ? `<div>${t('order-cancel-time-label', '取消时间：')}${escapeHtml(formatOrderDate(order.cancelDate))}</div>` : ''}
                         ${remainingText ? `<div style="color:#8b5e3c;">${escapeHtml(remainingText)}</div>` : ''}
-                        ${canReviewNow ? `<div style="color:#8b5e3c;">待评价图书：${pendingReviewCount} 本</div>` : ''}
+                        ${canReviewNow ? `<div style="color:#8b5e3c;">${t('order-pending-review-label', '待评价图书：')}${pendingReviewCount}${t('favorites-count-unit', ' 本')}</div>` : ''}
                     </div>
-                    <div style="margin-top:8px;font-size:12px;color:#8b5e3c;">点击查看订单详情</div>
+                    <div style="margin-top:8px;font-size:12px;color:#8b5e3c;">${t('order-click-detail', '点击查看订单详情')}</div>
                     ${itemsHtml}
-                    ${(canReceive || canReviewNow) ? `<div class="cart-item-controls" style="margin-top:10px;justify-content:flex-end;gap:8px;">${canReceive ? `<button class="btn btn-primary btn-confirm-received" data-id="${order.id}">已收货</button>` : ''}${canReviewNow ? `<button class="btn btn-secondary btn-open-review" data-id="${order.id}">去评价</button>` : ''}</div>` : ''}
+                    ${(canReceive || canReviewNow) ? `<div class="cart-item-controls" style="margin-top:10px;justify-content:flex-end;gap:8px;">${canReceive ? `<button class="btn btn-primary btn-confirm-received" data-id="${order.id}">${t('order-btn-received', '已收货')}</button>` : ''}${canReviewNow ? `<button class="btn btn-secondary btn-open-review" data-id="${order.id}">${t('order-btn-review', '去评价')}</button>` : ''}</div>` : ''}
                 </div>
             `;
 
@@ -2995,7 +3064,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const body = modal.querySelector('.order-detail-body');
         if (!body) return;
 
-        const statusLabel = ORDER_STATUS_LABELS[normalizeOrderStatus(order.status)] || order.status;
+        const statusLabel = getOrderStatusLabel(order.status);
         const remainingText = getOrderRemainingText(order);
         const items = Array.isArray(order.items) ? order.items : [];
         const isCancelled = normalizeOrderStatus(order.status) === 'cancelled';
@@ -3005,9 +3074,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         body.innerHTML = `
             <div class="order-detail-header">
-                <span class="book-detail-category">订单详情</span>
-                <h2 id="order-detail-title" class="book-detail-title">订单号：${escapeHtml(order.poNumber || String(order.id))}</h2>
-                <p class="book-detail-author">收件人：${escapeHtml(order.customerName || '用户')}</p>
+                <span class="book-detail-category">${t('order-detail-title', '订单详情')}</span>
+                <h2 id="order-detail-title" class="book-detail-title">${t('order-number-label', '订单号：')}${escapeHtml(order.poNumber || String(order.id))}</h2>
+                <p class="book-detail-author">${t('order-detail-recipient', '收件人：')}${escapeHtml(order.customerName || '用户')}</p>
                 <div class="book-detail-rating-row">
                     <span class="book-detail-price">¥ ${Number(order.totalAmount || 0).toFixed(2)}</span>
                     <span class="book-detail-rating"><i class="fas fa-box"></i> ${escapeHtml(statusLabel)}</span>
@@ -3015,19 +3084,19 @@ document.addEventListener('DOMContentLoaded', async function() {
                 ${remainingText ? `<p class="book-detail-description" style="color:#8b5e3c;">${escapeHtml(remainingText)}</p>` : ''}
             </div>
             <div class="book-detail-section">
-                <h3>订单信息</h3>
+                <h3>${t('order-detail-info', '订单信息')}</h3>
                 <div class="book-detail-meta-grid">
-                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">下单时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.purchaseDate))}</strong></div>
-                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">支付方式</span><strong class="book-detail-meta-value">${escapeHtml(order.paymentMethod || '未记录')}</strong></div>
-                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">发货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.shipmentDate))}</strong></div>
-                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">到货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.arrivedDate))}</strong></div>
-                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">收货时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.receivedDate))}</strong></div>
-                    ${isCancelled && order.cancelDate ? `<div class="book-detail-meta-item"><span class="book-detail-meta-label">取消时间</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.cancelDate))}</strong></div>` : ''}
-                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">收货地址</span><strong class="book-detail-meta-value">${escapeHtml(order.shippingAddress || '-')}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-time-label', '下单时间：').replace(/：$/, '')}</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.purchaseDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-payment-method-label', '支付方式')}</span><strong class="book-detail-meta-value">${escapeHtml(order.paymentMethod || t('order-payment-method-unknown', '未记录'))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-shipped-time-label', '发货时间：').replace(/：$/, '')}</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.shipmentDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-arrived-time-label', '到货时间：').replace(/：$/, '')}</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.arrivedDate))}</strong></div>
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-received-time-label', '收货时间：').replace(/：$/, '')}</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.receivedDate))}</strong></div>
+                    ${isCancelled && order.cancelDate ? `<div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-cancel-time-label', '取消时间：').replace(/：$/, '')}</span><strong class="book-detail-meta-value">${escapeHtml(formatOrderDate(order.cancelDate))}</strong></div>` : ''}
+                    <div class="book-detail-meta-item"><span class="book-detail-meta-label">${t('order-address-label', '收货地址：').replace(/：$/, '')}</span><strong class="book-detail-meta-value">${escapeHtml(order.shippingAddress || '-')}</strong></div>
                 </div>
             </div>
             <div class="book-detail-section">
-                <h3>商品明细</h3>
+                <h3>${t('order-detail-products', '商品明细')}</h3>
                 ${items.length ? `
                     <div class="order-detail-items">
                         ${items.map(product => `
@@ -3039,10 +3108,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                             </div>
                         `).join('')}
                     </div>
-                ` : '<p class="book-detail-description">该订单未记录商品明细。</p>'}
+                ` : `<p class="book-detail-description">${t('order-items-missing-period', '该订单未记录商品明细。')}</p>`}
             </div>
             <div class="book-detail-section" data-section="order-reviews">
-                <h3>用户评价</h3>
+                <h3>${t('order-detail-reviews', '用户评价')}</h3>
                 <p class="book-detail-description">${canReviewOrder ? `请为本订单内图书逐本评分（可选评论），最高 5 分。${pendingReviewCount > 0 ? `还有 ${pendingReviewCount} 本待评价。` : '已全部评价完成。'}` : '订单签收后才能评价图书。'}</p>
                 ${reviewableItems.length ? `
                     <div class="order-review-list">
@@ -3078,17 +3147,20 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         browsingHistory.forEach(entry => {
+            const sourceBook = findBookById(entry.id, { includeDisabled: true }) || entry;
+            const displayTitle = getBookDisplayTitle(sourceBook);
+            const displayAuthor = getBookDisplayAuthor(sourceBook);
             const item = document.createElement('div');
             item.className = 'cart-item';
             item.dataset.id = entry.id;
             item.innerHTML = `
                 <div class="cart-item-image" style="background-color: ${sanitizeColor(entry.color)}">
-                    <span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((entry.title || '图书').substring(0, 6))}...</span>
+                    <span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((displayTitle || t('book-title-default', '图书')).substring(0, 6))}...</span>
                 </div>
                 <div class="cart-item-details">
-                    <h4 class="cart-item-title">${escapeHtml(entry.title || '未命名图书')}</h4>
-                    <p class="cart-item-author">${escapeHtml(entry.author || '未知作者')}</p>
-                    <div style="font-size:13px;color:var(--text-light);">浏览时间：${escapeHtml(formatOrderDate(entry.viewedAt))}</div>
+                    <h4 class="cart-item-title">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h4>
+                    <p class="cart-item-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
+                    <div style="font-size:13px;color:var(--text-light);">${t('history-view-time-label', '浏览时间：')}${escapeHtml(formatOrderDate(entry.viewedAt))}</div>
                     <div class="cart-item-controls">
                         <button class="btn btn-secondary history-open-btn" data-id="${entry.id}">再次查看</button>
                         <button class="remove-item remove-history" data-id="${entry.id}" title="移除记录">
@@ -3229,15 +3301,17 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
 
             if (cart.length === 0) return;
-            
-            if (confirm('确定要清空购物车吗？')) {
+
+            const isEnglish = window.currentLang === 'en';
+            const confirmText = isEnglish ? 'Are you sure you want to clear the cart?' : '确定要清空购物车吗？';
+            if (confirm(confirmText)) {
                 cart = [];
                 persistCart();
                 renderCart();
                 updateCartCount();
                 calculateTotal();
                 refreshRecommendationsByBehavior({ silent: true });
-                showNotification('购物车已清空', 'info');
+                showNotification(isEnglish ? 'Cart cleared' : '购物车已清空', 'info');
             }
         });
         
@@ -3278,7 +3352,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             myOrdersLink.addEventListener('click', async function(e) {
                 e.preventDefault();
                 if (isGuestUser()) {
-                    showNotification('游客无法查看订单，请登录后使用', 'info');
+                    showNotification(t('orders-guest-login-required', '游客无法查看订单，请登录后使用'), 'info');
                     return;
                 }
                 await loadUserOrdersFromSupabase();
@@ -3408,6 +3482,14 @@ window.onLanguageChanged = function(lang) {
     renderHistorySidebar();
     // 重新渲染系统消息侧边栏（如果需要）
     renderSystemMessagesSidebar();
+    // 重新按登录态刷新账号徽标，避免被 data-i18n 默认文案覆盖
+    updateUserModeBadge();
+    // 同步更新游客态按钮提示文案
+    applyGuestUIRestrictions();
+
+    if (Array.isArray(searchFilterState.baseResults) && searchFilterState.baseResults.length && searchFilterState.lastQuery) {
+        renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+    }
 };
     }
     
@@ -3426,10 +3508,10 @@ window.onLanguageChanged = function(lang) {
             <div class="container">
                 <div class="section-header">
                     <div>
-                        <h2 class="section-title">搜索结果</h2>
+                        <h2 class="section-title">${t('search-results-title', '搜索结果')}</h2>
                         <p class="section-subtitle" id="search-results-summary"> </p>
                     </div>
-                    <button type="button" class="btn btn-outline" id="clear-search-results">清除搜索</button>
+                    <button type="button" class="btn btn-outline" id="clear-search-results">${t('search-results-clear-btn', '清除搜索')}</button>
                 </div>
                 <div id="search-filter-panel" style="display:none;margin:0 0 24px;padding:18px;border:1px solid rgba(176,157,123,.25);border-radius:16px;background:rgba(255,248,240,.85);box-shadow:0 8px 24px rgba(0,0,0,.05);"></div>
                 <div class="books-grid search-results-grid"></div>
@@ -3508,48 +3590,48 @@ window.onLanguageChanged = function(lang) {
         panel.innerHTML = `
             <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px;">
                 <div>
-                    <div style="font-weight:700;color:#5c4937;margin-bottom:4px;">搜索筛选</div>
-                    <div style="font-size:13px;color:#7a6857;">不改动原搜索逻辑，仅对当前搜索结果做二次筛选</div>
+                    <div style="font-weight:700;color:#5c4937;margin-bottom:4px;">${t('search-filter-title', '搜索筛选')}</div>
+                    <div style="font-size:13px;color:#7a6857;">${t('search-filter-subtitle', '不改动原搜索逻辑，仅对当前搜索结果做二次筛选')}</div>
                 </div>
-                <button type="button" class="btn btn-outline" id="reset-search-filters">重置筛选</button>
+                <button type="button" class="btn btn-outline" id="reset-search-filters">${t('search-filter-reset-btn', '重置筛选')}</button>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
                 <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid rgba(176,157,123,.35);border-radius:999px;cursor:pointer;background:${searchFilterState.mode === 'category-price' ? 'rgba(176,157,123,.15)' : 'transparent'};">
                     <input type="radio" name="search-filter-mode" value="category-price" ${searchFilterState.mode === 'category-price' ? 'checked' : ''}>
-                    <span>类别 + 价格范围</span>
+                    <span>${t('search-filter-mode-category-price', '类别 + 价格范围')}</span>
                 </label>
                 <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid rgba(176,157,123,.35);border-radius:999px;cursor:pointer;background:${searchFilterState.mode === 'tags' ? 'rgba(176,157,123,.15)' : 'transparent'};">
                     <input type="radio" name="search-filter-mode" value="tags" ${searchFilterState.mode === 'tags' ? 'checked' : ''}>
-                    <span>一个或多个标签</span>
+                    <span>${t('search-filter-mode-tags', '一个或多个标签')}</span>
                 </label>
             </div>
             <div id="category-price-filters" style="display:${searchFilterState.mode === 'category-price' ? 'block' : 'none'};">
                 <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
                     <label style="display:flex;flex-direction:column;gap:6px;min-width:180px;">
-                        <span style="font-size:13px;color:#6b5a49;">类别</span>
+                        <span style="font-size:13px;color:#6b5a49;">${t('search-filter-category-label', '类别')}</span>
                         <select id="search-filter-category" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
-                            <option value="all">全部类别</option>
+                            <option value="all">${t('search-filter-all-categories', '全部类别')}</option>
                             ${categories.map(category => `<option value="${escapeHtml(category)}" ${searchFilterState.category === category ? 'selected' : ''}>${escapeHtml(getCategoryName(category))}</option>`).join('')}
                         </select>
                     </label>
                     <label style="display:flex;flex-direction:column;gap:6px;min-width:140px;">
-                        <span style="font-size:13px;color:#6b5a49;">最低价格</span>
-                        <input id="search-filter-min-price" type="number" min="0" step="0.01" placeholder="不限" value="${escapeHtml(searchFilterState.minPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
+                        <span style="font-size:13px;color:#6b5a49;">${t('search-filter-min-price-label', '最低价格')}</span>
+                        <input id="search-filter-min-price" type="number" min="0" step="0.01" placeholder="${t('search-filter-no-limit', '不限')}" value="${escapeHtml(searchFilterState.minPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
                     </label>
                     <label style="display:flex;flex-direction:column;gap:6px;min-width:140px;">
-                        <span style="font-size:13px;color:#6b5a49;">最高价格</span>
-                        <input id="search-filter-max-price" type="number" min="0" step="0.01" placeholder="不限" value="${escapeHtml(searchFilterState.maxPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
+                        <span style="font-size:13px;color:#6b5a49;">${t('search-filter-max-price-label', '最高价格')}</span>
+                        <input id="search-filter-max-price" type="number" min="0" step="0.01" placeholder="${t('search-filter-no-limit', '不限')}" value="${escapeHtml(searchFilterState.maxPrice)}" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(176,157,123,.35);background:#fff;">
                     </label>
                 </div>
             </div>
             <div id="tag-filters" style="display:${searchFilterState.mode === 'tags' ? 'block' : 'none'};">
-                <div style="font-size:13px;color:#6b5a49;margin-bottom:10px;">可多选标签（同时满足）</div>
+                <div style="font-size:13px;color:#6b5a49;margin-bottom:10px;">${t('search-filter-tags-tip', '可多选标签（同时满足）')}</div>
                 <div style="display:flex;flex-wrap:wrap;gap:10px;">
                     ${tags.length ? tags.map(tag => `
                         <label style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;border:1px solid rgba(176,157,123,.35);background:${searchFilterState.selectedTags.includes(tag) ? 'rgba(176,157,123,.15)' : '#fff'};cursor:pointer;">
                             <input type="checkbox" class="search-filter-tag" value="${escapeHtml(tag)}" ${searchFilterState.selectedTags.includes(tag) ? 'checked' : ''}>
                             <span>${escapeHtml(tag)}</span>
-                        </label>`).join('') : '<span style="color:#7a6857;">当前结果暂无可用标签</span>'}
+                        </label>`).join('') : `<span style="color:#7a6857;">${t('search-filter-no-tags', '当前结果暂无可用标签')}</span>`}
                 </div>
             </div>
         `;
@@ -3605,17 +3687,27 @@ window.onLanguageChanged = function(lang) {
         const safeQuery = escapeHtml(rawQuery);
         const visibleResults = getVisibleBooks(resultBooks);
         const baseCount = Array.isArray(searchFilterState.baseResults) ? searchFilterState.baseResults.length : visibleResults.length;
+        const isEnglish = window.currentLang === 'en';
+        const allText = t('search-filter-all', '全部');
+        const noLimitText = t('search-filter-no-limit', '不限');
+        const filterLabelTags = t('search-filter-label-tags', '标签');
+        const filterLabelCategory = t('search-filter-label-category', '类别');
+        const filterLabelPrice = t('search-filter-label-price', '价格');
         const filterDescription = searchFilterState.mode === 'tags'
-            ? (searchFilterState.selectedTags.length ? `标签：${searchFilterState.selectedTags.join('、')}` : '标签：全部')
-            : `类别：${searchFilterState.category === 'all' ? '全部' : getCategoryName(searchFilterState.category)}，价格：${searchFilterState.minPrice || '不限'} - ${searchFilterState.maxPrice || '不限'}`;
+            ? (searchFilterState.selectedTags.length ? `${filterLabelTags}: ${searchFilterState.selectedTags.join(isEnglish ? ', ' : '、')}` : `${filterLabelTags}: ${allText}`)
+            : `${filterLabelCategory}: ${searchFilterState.category === 'all' ? allText : getCategoryName(searchFilterState.category)}${isEnglish ? ', ' : '，'}${filterLabelPrice}: ${searchFilterState.minPrice || noLimitText} - ${searchFilterState.maxPrice || noLimitText}`;
 
         section.style.display = 'block';
         syncSearchFilterPanel(section);
         grid.innerHTML = '';
-        summary.innerHTML = `关键词“${safeQuery}”共找到 ${baseCount} 本图书；当前筛选后显示 ${visibleResults.length} 本。<br>筛选方式：${escapeHtml(filterDescription)}。热门图书区域保留在下方，搜索结果与热门展示已分开。`;
+        summary.innerHTML = t('search-results-summary-template', '关键词“{query}”共找到 {base} 本图书；当前筛选后显示 {visible} 本。<br>筛选方式：{filter}。热门图书区域保留在下方，搜索结果与热门展示已分开。')
+            .replace('{query}', safeQuery)
+            .replace('{base}', String(baseCount))
+            .replace('{visible}', String(visibleResults.length))
+            .replace('{filter}', escapeHtml(filterDescription));
 
         if (!visibleResults.length) {
-            grid.innerHTML = '<div class="no-results"><p>没有找到相关图书，请尝试更换关键词。</p></div>';
+            grid.innerHTML = `<div class="no-results"><p>${t('search-results-empty', '没有找到相关图书，请尝试更换关键词。')}</p></div>`;
             section.scrollIntoView({ behavior: 'smooth', block: 'start' });
             return;
         }
@@ -3626,16 +3718,19 @@ window.onLanguageChanged = function(lang) {
             bookCard.dataset.id = book.id;
             bookCard.dataset.category = book.category;
             const coverUrl = getBookBrowseCoverUrl(book);
+            const displayTitle = getBookDisplayTitle(book);
+            const displayAuthor = getBookDisplayAuthor(book);
+            const displayDescription = getBookDisplayDescription(book);
 
             bookCard.innerHTML = `
                 <div class="book-image" style="${getBookBrowseCoverStyle(book)}">
-                    ${coverUrl ? '' : `<span style="color: white; font-weight: 500;">${escapeHtml((book.title || '图书').substring(0, 10))}${(book.title || '').length > 10 ? '...' : ''}</span>`}
+                    ${coverUrl ? '' : `<span style="color: white; font-weight: 500;">${escapeHtml((displayTitle || t('book-title-default', '图书')).substring(0, 10))}${(displayTitle || '').length > 10 ? '...' : ''}</span>`}
                 </div>
                 <div class="book-content">
                     <div class="book-category">${escapeHtml(getCategoryName(book.category))}</div>
-                    <h3 class="book-title">${escapeHtml(book.title || '未命名图书')}</h3>
-                    <p class="book-author">${escapeHtml(book.author || '未知作者')}</p>
-                    <p class="book-description">${escapeHtml(String(book.description || '').replace(/<[^>]+>/g, '').slice(0, 80) || '暂无简介')}</p>
+                    <h3 class="book-title">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h3>
+                    <p class="book-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
+                    <p class="book-description">${escapeHtml(String(displayDescription || '').replace(/<[^>]+>/g, '').slice(0, 80) || t('book-description-empty', '暂无简介'))}</p>
                     <div class="book-footer">
                         <div class="book-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
                         <div class="book-rating">
@@ -3703,7 +3798,7 @@ window.onLanguageChanged = function(lang) {
 
         if (query === '') {
             clearSearchResults();
-            showNotification('已清除搜索结果，下面仍显示热门图书', 'info');
+            showNotification(t('search-results-cleared-notice', '已清除搜索结果，下面仍显示热门图书'), 'info');
             return;
         }
 
@@ -3711,11 +3806,16 @@ window.onLanguageChanged = function(lang) {
         const scoredBooks = getVisibleBooks(books).map(book => {
             const fields = [
                 book.title,
+                book.titleEn,
                 book.author,
+                book.authorEn,
                 book.description,
+                book.descriptionEn,
                 getCategoryName(book.category),
                 ...(normalizeTextList(book.tags)),
+                ...(normalizeTextList(book.tagsEn)),
                 book.publisher,
+                book.publisherEn,
                 book.isbn
             ].map(value => String(value || '').toLowerCase());
 
@@ -3739,7 +3839,11 @@ window.onLanguageChanged = function(lang) {
 
         const filteredBooks = getSearchFilteredBooks();
         renderSearchResults(filteredBooks, rawQuery);
-        showNotification(`搜索完成：找到 ${searchFilterState.baseResults.length} 本相关图书，可继续按类别价格或标签筛选`, 'info');
+        showNotification(
+            t('search-results-complete-notice-template', '搜索完成：找到 {count} 本相关图书，可继续按类别价格或标签筛选')
+                .replace('{count}', String(searchFilterState.baseResults.length)),
+            'info'
+        );
     }
     
     // 添加到购物车
@@ -3773,7 +3877,12 @@ window.onLanguageChanged = function(lang) {
         updateCartCount();
         calculateTotal();
         refreshRecommendationsByBehavior({ silent: true });
-        showNotification(`"${book.title.substring(0, 15)}..." 已添加到购物车`, 'success');
+        const isEnglish = window.currentLang === 'en';
+        const bookTitleSnippet = String(getBookDisplayTitle(book) || (isEnglish ? 'Untitled Book' : '未命名图书')).substring(0, 15);
+        const addMessage = isEnglish
+            ? `"${bookTitleSnippet}..." added to cart`
+            : `"${bookTitleSnippet}..." 已添加到购物车`;
+        showNotification(addMessage, 'success');
         
         // 自动打开购物车
         openCart();
@@ -3822,7 +3931,12 @@ window.onLanguageChanged = function(lang) {
         refreshRecommendationsByBehavior({ silent: true });
         
         if (book) {
-            showNotification(`"${book.title.substring(0, 15)}..." 已从购物车移除`, 'info');
+            const isEnglish = window.currentLang === 'en';
+            const bookTitleSnippet = String(getBookDisplayTitle(book) || (isEnglish ? 'Untitled Book' : '未命名图书')).substring(0, 15);
+            const removeMessage = isEnglish
+                ? `"${bookTitleSnippet}..." removed from cart`
+                : `"${bookTitleSnippet}..." 已从购物车移除`;
+            showNotification(removeMessage, 'info');
         }
     }
     
@@ -3890,7 +4004,7 @@ window.onLanguageChanged = function(lang) {
 
     function openOrders() {
         if (isGuestUser()) {
-            showNotification('游客无法查看订单，请登录后使用', 'info');
+            showNotification(t('orders-guest-login-required', '游客无法查看订单，请登录后使用'), 'info');
             return;
         }
         closeCart();
@@ -3953,6 +4067,9 @@ window.onLanguageChanged = function(lang) {
     
     // 显示通知
     function showNotification(message, type) {
+        if (window.currentLang === 'en' && typeof window.runtimeTranslateString === 'function') {
+            message = window.runtimeTranslateString(message);
+        }
         // 移除现有通知
         const existingNotification = document.querySelector('.notification');
         if (existingNotification) {
@@ -4048,15 +4165,18 @@ window.onLanguageChanged = function(lang) {
     }
 
     function getBookSummaryHtml(book) {
-        const rawSummary = String(book?.summaryHtml || '').trim();
+        const preferEnglish = isEnglishContentMode();
+        const rawSummary = String(preferEnglish
+            ? (book?.summaryHtmlEn ?? book?.summary_html_en ?? book?.summaryHtml ?? '')
+            : (book?.summaryHtml ?? book?.summaryHtmlEn ?? book?.summary_html_en ?? '')).trim();
         if (rawSummary) return sanitizeBookSummaryHtml(rawSummary);
 
-        const rawDescription = String(book?.description || '').trim();
+        const rawDescription = getBookDisplayDescription(book);
         if (/<[a-z][\s\S]*>/i.test(rawDescription)) {
             return sanitizeBookSummaryHtml(rawDescription);
         }
 
-        const fallbackText = escapeHtml(String(book?.description || '暂无简介').replace(/<[^>]+>/g, '').trim() || '暂无简介');
+        const fallbackText = escapeHtml(String(rawDescription || t('book-description-empty', '暂无简介')).replace(/<[^>]+>/g, '').trim() || t('book-description-empty', '暂无简介'));
         return `<p>${fallbackText}</p>`;
     }
 
@@ -4067,7 +4187,7 @@ window.onLanguageChanged = function(lang) {
     }
 
     function createDefaultCoverImage(book) {
-        const label = String(book?.title || '图书').slice(0, 12).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+        const label = String(getBookDisplayTitle(book) || t('book-title-default', '图书')).slice(0, 12).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
         const color = sanitizeColor(book?.color);
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="640" viewBox="0 0 480 640"><rect width="100%" height="100%" fill="${color}"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="28" fill="white">${label}</text></svg>`;
         return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
@@ -4570,7 +4690,7 @@ window.onLanguageChanged = function(lang) {
             modal._currentIndex = normalizedIndex;
             const currentItem = galleryItems[normalizedIndex];
             const currentSrc = escapeHtml(sanitizeReviewMediaUrl(currentItem?.src));
-            const currentName = escapeHtml(currentItem?.name || (currentItem?.kind === 'video' ? '视频附件' : '图片附件'));
+            const currentName = escapeHtml(currentItem?.name || (currentItem?.kind === 'video' ? t('review-video-attachment', '视频附件') : t('review-image-attachment', '图片附件')));
 
             if (stage) {
                 stage.innerHTML = currentItem?.kind === 'video'
@@ -4579,7 +4699,9 @@ window.onLanguageChanged = function(lang) {
             }
 
             if (title) {
-                title.textContent = currentItem?.kind === 'video' ? '评价视频预览' : '评价图片预览';
+                title.textContent = currentItem?.kind === 'video'
+                    ? t('review-gallery-video-title', '评价视频预览')
+                    : t('review-gallery-image-title', '评价图片预览');
             }
 
             if (counter) {
@@ -4589,7 +4711,7 @@ window.onLanguageChanged = function(lang) {
             if (thumbs) {
                 thumbs.innerHTML = galleryItems.map((item, index) => {
                     const src = escapeHtml(sanitizeReviewMediaUrl(item?.src));
-                    const label = escapeHtml(item?.name || (item?.kind === 'video' ? '视频附件' : '图片附件'));
+                    const label = escapeHtml(item?.name || (item?.kind === 'video' ? t('review-video-attachment', '视频附件') : t('review-image-attachment', '图片附件')));
                     return `
                         <button type="button" class="review-media-gallery-thumb ${index === normalizedIndex ? 'active' : ''}" data-index="${index}" aria-label="查看${label}">
                             ${item?.kind === 'video'
@@ -4624,21 +4746,25 @@ window.onLanguageChanged = function(lang) {
 
     function getBookMetaRows(book) {
         const ratingStats = bookRatingStatsMap.get(String(book?.id));
+        const displayAuthor = getBookDisplayAuthor(book);
+        const displayPublisher = isEnglishContentMode()
+            ? (String(book?.publisherEn ?? book?.publisher_en ?? '').trim() || String(book?.publisher || '').trim())
+            : (String(book?.publisher || '').trim() || String(book?.publisherEn ?? book?.publisher_en ?? '').trim());
         const rows = [
-            { label: '图书分类', value: getCategoryName(book.category) },
-            { label: '作者', value: book.author || '未知作者' },
-            { label: '评分', value: hasBookRating(book) ? `${formatBookRating(book)} / 5.0` : '暂无评分' },
-            { label: '价格', value: `¥ ${Number(book.price || 0).toFixed(2)}` }
+            { label: t('book-detail-meta-category', '图书分类'), value: getCategoryName(book.category) },
+            { label: t('book-detail-meta-author', '作者'), value: displayAuthor || t('book-author-unknown', '未知作者') },
+            { label: t('book-detail-meta-rating', '评分'), value: hasBookRating(book) ? `${formatBookRating(book)} / 5.0` : t('book-rating-none', '暂无评分') },
+            { label: t('book-detail-meta-price', '价格'), value: `¥ ${Number(book.price || 0).toFixed(2)}` }
         ];
 
         if (ratingStats?.count) {
-            rows.push({ label: '评价人数', value: `${Number(ratingStats.count)} 人` });
+            rows.push({ label: t('book-detail-meta-review-count', '评价人数'), value: `${Number(ratingStats.count)} ${t('book-detail-unit-people', '人')}` });
         }
 
-        if (book.publisher) rows.push({ label: '出版社', value: book.publisher });
+        if (displayPublisher) rows.push({ label: t('book-detail-meta-publisher', '出版社'), value: displayPublisher });
         if (book.isbn) rows.push({ label: 'ISBN', value: book.isbn });
-        const tags = normalizeTextList(book.tags);
-        if (tags.length) rows.push({ label: '标签', value: tags.join(' / ') });
+        const tags = getBookDisplayTags(book);
+        if (tags.length) rows.push({ label: t('book-detail-meta-tags', '标签'), value: tags.join(' / ') });
 
         return rows;
     }
@@ -4653,36 +4779,36 @@ window.onLanguageChanged = function(lang) {
     }
 
     function getBookReviewHelpfulnessHint(review) {
-        if (isOwnReview(review)) return '这是你发布的评价，不能给自己投票';
-        if (isGuestUser()) return '登录后可标记这条评价是否有帮助';
-        if (!String(currentUserId || '').trim()) return '当前账号未建立云端会话，暂不可投票';
-        return '这条评价对你有帮助吗？';
+        if (isOwnReview(review)) return t('book-review-hint-own', '这是你发布的评价，不能给自己投票');
+        if (isGuestUser()) return t('book-review-hint-login-vote', '登录后可标记这条评价是否有帮助');
+        if (!String(currentUserId || '').trim()) return t('book-review-hint-no-session-vote', '当前账号未建立云端会话，暂不可投票');
+        return t('book-review-hint-question', '这条评价对你有帮助吗？');
     }
 
     function getReviewReportHint(review) {
-        if (isOwnReview(review)) return '这是你发布的评价，不能举报自己';
-        if (isGuestUser()) return '登录后可举报争议评论';
-        if (!String(currentUserId || '').trim()) return '当前账号未建立云端会话，暂不可举报';
+        if (isOwnReview(review)) return t('book-report-hint-own', '这是你发布的评价，不能举报自己');
+        if (isGuestUser()) return t('book-report-hint-login-report', '登录后可举报争议评论');
+        if (!String(currentUserId || '').trim()) return t('book-report-hint-no-session-report', '当前账号未建立云端会话，暂不可举报');
 
         const report = currentUserReportedReviewMap.get(String(review?.id || '').trim());
-        if (!report) return '发现争议内容可发起举报';
-        if (report.status === 'pending') return '你已举报，管理员处理中';
-        if (report.status === 'resolved_hidden') return '举报已处理：评论已被隐藏';
-        if (report.status === 'resolved_rejected') return '举报已处理：管理员驳回举报';
-        return '你已提交过举报，可再次修改原因';
+        if (!report) return t('book-report-hint-new', '发现争议内容可发起举报');
+        if (report.status === 'pending') return t('book-report-hint-pending', '你已举报，管理员处理中');
+        if (report.status === 'resolved_hidden') return t('book-report-hint-hidden', '举报已处理：评论已被隐藏');
+        if (report.status === 'resolved_rejected') return t('book-report-hint-rejected', '举报已处理：管理员驳回举报');
+        return t('book-report-hint-edit', '你已提交过举报，可再次修改原因');
     }
 
     function renderBookReviewsSection(book) {
         const reviews = getBookReviewsForDisplay(book?.id, 12);
         if (!reviews.length) {
-            return '<p class="book-detail-description">暂无用户评价，欢迎购买后成为首位评价者。</p>';
+            return `<p class="book-detail-description">${t('book-reviews-empty', '暂无用户评价，欢迎购买后成为首位评价者。')}</p>`;
         }
 
         return `
             <div class="book-review-list">
                 ${reviews.map(review => {
                     const rating = clampRating(review?.rating);
-                    const createdText = review?.createdAt ? formatOrderDate(review.createdAt) : '时间未知';
+                    const createdText = review?.createdAt ? formatOrderDate(review.createdAt) : t('unknown-time', '时间未知');
                     const reviewerName = String(review?.reviewerName || '匿名用户').trim();
                     const comment = String(review?.comment || '').trim();
                     const media = normalizeReviewMediaList(review?.media);
@@ -4698,37 +4824,37 @@ window.onLanguageChanged = function(lang) {
                                 <strong>${escapeHtml(reviewerName)}</strong>
                                 <span class="book-review-date">${escapeHtml(createdText)}</span>
                             </div>
-                            <div class="book-review-rating">${[1, 2, 3, 4, 5].map(score => `<i class="fas fa-star ${score <= rating ? 'active' : ''}"></i>`).join('')}<span>${rating}.0 分</span></div>
-                            <p class="book-review-comment">${comment ? escapeHtml(comment) : '该用户仅评分，未填写评论。'}</p>
+                            <div class="book-review-rating">${[1, 2, 3, 4, 5].map(score => `<i class="fas fa-star ${score <= rating ? 'active' : ''}"></i>`).join('')}<span>${rating}.0 ${t('book-rating-unit', '分')}</span></div>
+                            <p class="book-review-comment">${comment ? escapeHtml(comment) : t('book-review-comment-empty', '该用户仅评分，未填写评论。')}</p>
                             ${media.length ? `<div class="book-review-media-grid">${renderReviewMediaGalleryItemsHtml(media, review?.id)}</div>` : ''}
                             <div class="book-review-helpfulness">
                                 <span class="book-review-helpfulness-label">${escapeHtml(getBookReviewHelpfulnessHint(review))}</span>
                                 <div class="book-review-helpfulness-actions">
                                     <button type="button" class="review-helpfulness-btn helpful ${stats.currentUserVote === true ? 'active' : ''}" data-review-id="${reviewId}" data-helpful="true" ${canVote ? '' : 'disabled'}>
                                         <i class="fas fa-thumbs-up"></i>
-                                        <span>有帮助</span>
+                                        <span>${t('book-review-helpful', '有帮助')}</span>
                                         <strong>${stats.helpfulCount}</strong>
                                     </button>
                                     <button type="button" class="review-helpfulness-btn not-helpful ${stats.currentUserVote === false ? 'active' : ''}" data-review-id="${reviewId}" data-helpful="false" ${canVote ? '' : 'disabled'}>
                                         <i class="fas fa-thumbs-down"></i>
-                                        <span>没帮助</span>
+                                        <span>${t('book-review-not-helpful', '没帮助')}</span>
                                         <strong>${stats.notHelpfulCount}</strong>
                                     </button>
                                 </div>
                             </div>
                             <div class="book-review-report">
-                                <button type="button" class="btn btn-outline btn-open-review-report" data-review-id="${reviewId}" aria-expanded="false" ${isOwnReview(review) ? 'disabled' : ''}>举报</button>
+                                <button type="button" class="btn btn-outline btn-open-review-report" data-review-id="${reviewId}" aria-expanded="false" ${isOwnReview(review) ? 'disabled' : ''}>${t('book-review-report-btn', '举报')}</button>
                                 <div class="book-review-report-body" data-review-id="${reviewId}" hidden>
                                     <div class="book-review-helpfulness-label">${escapeHtml(getReviewReportHint(review))}</div>
                                     <form class="review-report-form" data-review-id="${reviewId}">
                                         <div class="review-report-reasons">
                                             ${[
-                                                { value: 'violence', label: '暴力/血腥' },
-                                                { value: 'sexual', label: '色情/低俗' },
-                                                { value: 'political', label: '政治敏感' },
-                                                { value: 'malicious', label: '恶意攻击/辱骂' },
-                                                { value: 'spam', label: '广告/垃圾信息' },
-                                                { value: 'other', label: '其他' }
+                                                { value: 'violence', label: t('admin-reason-violence', '暴力/血腥') },
+                                                { value: 'sexual', label: t('admin-reason-sexual', '色情/低俗') },
+                                                { value: 'political', label: t('admin-reason-political', '政治敏感') },
+                                                { value: 'malicious', label: t('admin-reason-malicious', '恶意攻击/辱骂') },
+                                                { value: 'spam', label: t('admin-reason-spam', '广告/垃圾信息') },
+                                                { value: 'other', label: t('admin-reason-other', '其他') }
                                             ].map(reason => `
                                                 <label>
                                                     <input type="checkbox" name="report-reason" value="${reason.value}" ${existingReasons.includes(reason.value) ? 'checked' : ''}>
@@ -4736,10 +4862,10 @@ window.onLanguageChanged = function(lang) {
                                                 </label>
                                             `).join('')}
                                         </div>
-                                        <textarea class="review-report-other" rows="2" maxlength="200" placeholder="若选择“其他”，请填写具体原因">${escapeHtml(existingReport?.reasonOther || '')}</textarea>
+                                        <textarea class="review-report-other" rows="2" maxlength="200" placeholder="${t('book-review-report-other-placeholder', '若选择“其他”，请填写具体原因')}">${escapeHtml(existingReport?.reasonOther || '')}</textarea>
                                         <div class="review-report-actions">
-                                            <button type="submit" class="btn btn-primary" ${canReport ? '' : 'disabled'}>提交举报</button>
-                                            <button type="button" class="btn btn-outline btn-cancel-review-report">取消</button>
+                                            <button type="submit" class="btn btn-primary" ${canReport ? '' : 'disabled'}>${t('book-review-report-submit', '提交举报')}</button>
+                                            <button type="button" class="btn btn-outline btn-cancel-review-report">${t('common-cancel', '取消')}</button>
                                         </div>
                                     </form>
                                 </div>
@@ -4770,7 +4896,7 @@ window.onLanguageChanged = function(lang) {
                 const nextHidden = !reportBody.hidden;
                 reportBody.hidden = nextHidden;
                 this.setAttribute('aria-expanded', nextHidden ? 'false' : 'true');
-                this.textContent = nextHidden ? '举报' : '收起';
+                this.textContent = nextHidden ? t('book-review-report-btn', '举报') : t('book-review-report-collapse', '收起');
             });
         });
 
@@ -4785,7 +4911,7 @@ window.onLanguageChanged = function(lang) {
                     const toggleButton = container.querySelector(`.btn-open-review-report[data-review-id="${reviewId}"]`);
                     if (toggleButton) {
                         toggleButton.setAttribute('aria-expanded', 'false');
-                        toggleButton.textContent = '举报';
+                        toggleButton.textContent = t('book-review-report-btn', '举报');
                     }
                 }
             });
@@ -4899,9 +5025,12 @@ window.onLanguageChanged = function(lang) {
         const body = modal.querySelector('.book-detail-body');
         if (!body) return;
 
-        const tags = normalizeTextList(book.tags);
+        const tags = getBookDisplayTags(book);
         const photoUrls = getBookPhotoUrls(book);
         const safeSummaryHtml = getBookSummaryHtml(book);
+        const displayTitle = getBookDisplayTitle(book);
+        const displayAuthor = getBookDisplayAuthor(book);
+        const displayDescription = getBookDisplayDescription(book);
         const metaRows = getBookMetaRows(book).map(item => `
             <div class="book-detail-meta-item">
                 <span class="book-detail-meta-label">${escapeHtml(item.label)}</span>
@@ -4917,15 +5046,15 @@ window.onLanguageChanged = function(lang) {
                     <div class="book-detail-cover ${hasGallery ? 'has-image' : ''}" style="${hasGallery ? '' : getBookCoverStyle(book)}">
                         ${hasGallery ? `
                             <button type="button" class="book-gallery-nav prev" aria-label="上一张图片"><i class="fas fa-chevron-left"></i></button>
-                            <img class="book-detail-cover-image" src="${photoUrls[0]}" alt="${escapeHtml(book.title || '图书')} 图片 1">
+                            <img class="book-detail-cover-image" src="${photoUrls[0]}" alt="${escapeHtml(displayTitle || t('book-title-default', '图书'))} 图片 1">
                             <button type="button" class="book-gallery-nav next" aria-label="下一张图片"><i class="fas fa-chevron-right"></i></button>
-                        ` : `<span>${escapeHtml(book.title || '图书')}</span>`}
+                        ` : `<span>${escapeHtml(displayTitle || t('book-title-default', '图书'))}</span>`}
                     </div>
                     ${hasGallery && photoUrls.length > 1 ? `
                         <div class="book-detail-thumbs">
                             ${photoUrls.map((url, index) => `
                                 <button type="button" class="book-detail-thumb ${index === 0 ? 'active' : ''}" data-index="${index}" aria-label="查看第 ${index + 1} 张图片">
-                                    <img src="${url}" alt="${escapeHtml(book.title || '图书')} 缩略图 ${index + 1}">
+                                    <img src="${url}" alt="${escapeHtml(displayTitle || t('book-title-default', '图书'))} 缩略图 ${index + 1}">
                                 </button>
                             `).join('')}
                         </div>
@@ -4933,48 +5062,48 @@ window.onLanguageChanged = function(lang) {
                 </div>
                 <div class="book-detail-summary">
                     <div class="book-detail-category">${escapeHtml(getCategoryName(book.category))}</div>
-                    <h2 id="book-detail-title" class="book-detail-title">${escapeHtml(book.title || '未命名图书')}</h2>
-                    <p class="book-detail-author">作者：${escapeHtml(book.author || '未知作者')}</p>
+                    <h2 id="book-detail-title" class="book-detail-title">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h2>
+                    <p class="book-detail-author">${t('book-detail-author-prefix', '作者：')}${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
                     <div class="book-detail-rating-row">
                         <span class="book-detail-price">¥ ${Number(book.price || 0).toFixed(2)}</span>
                         <span class="book-detail-rating"><i class="fas fa-star"></i> ${formatBookRating(book)}</span>
                     </div>
-                    <p class="book-detail-description">${escapeHtml(String(book.description || '暂无简介').replace(/<[^>]+>/g, ''))}</p>
+                    <p class="book-detail-description">${escapeHtml(String(displayDescription || t('book-description-empty', '暂无简介')).replace(/<[^>]+>/g, ''))}</p>
                     <div class="book-detail-actions">
                         <button class="btn btn-primary detail-add-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${book.id}" ${isGuestUser() ? 'disabled' : ''}>
-                            <i class="fas fa-cart-plus"></i> 加入购物车
+                            <i class="fas fa-cart-plus"></i> ${t('book-detail-add-cart', '加入购物车')}
                         </button>
                         <button class="favorite-btn detail-favorite ${isFavoriteBook(book.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${book.id}" ${isGuestUser() ? 'disabled' : ''}>
                             <i class="${isFavoriteBook(book.id) ? 'fas' : 'far'} fa-heart"></i>
                         </button>
-                        <button class="btn btn-outline" type="button" data-role="close-detail">继续逛逛</button>
+                        <button class="btn btn-outline" type="button" data-role="close-detail">${t('book-detail-continue', '继续逛逛')}</button>
                     </div>
                 </div>
             </div>
             <div class="book-detail-section">
-                <h3>图书信息</h3>
+                <h3>${t('book-detail-section-info', '图书信息')}</h3>
                 <div class="book-detail-meta-grid">${metaRows}</div>
             </div>
             <div class="book-detail-section">
-                <h3>图书简介</h3>
+                <h3>${t('book-detail-section-description', '图书简介')}</h3>
                 <div class="book-detail-richtext">${safeSummaryHtml}</div>
             </div>
             <div class="book-detail-section">
-                <h3>内容亮点</h3>
+                <h3>${t('book-detail-section-highlights', '内容亮点')}</h3>
                 <ul class="book-detail-highlights">
-                    <li>适合喜欢「${escapeHtml(getCategoryName(book.category))}」内容的读者。</li>
-                    <li>${hasBookRating(book) ? `当前读者评分为 ${formatBookRating(book)}，可作为选购参考。` : '当前暂无买家评分，欢迎首位读者完成购买后评价。'}</li>
-                    <li>页面支持直接加入购物车，无需返回列表页。</li>
+                    <li>${t('book-detail-highlight-category-prefix', '适合喜欢「')}${escapeHtml(getCategoryName(book.category))}${t('book-detail-highlight-category-suffix', '」内容的读者。')}</li>
+                    <li>${hasBookRating(book) ? `${t('book-detail-highlight-rating-prefix', '当前读者评分为 ')}${formatBookRating(book)}${t('book-detail-highlight-rating-suffix', '，可作为选购参考。')}` : t('book-detail-highlight-no-rating', '当前暂无买家评分，欢迎首位读者完成购买后评价。')}</li>
+                    <li>${t('book-detail-highlight-direct-cart', '页面支持直接加入购物车，无需返回列表页。')}</li>
                 </ul>
             </div>
             ${tags.length ? `
             <div class="book-detail-section">
-                <h3>关键词</h3>
+                <h3>${t('book-detail-section-tags', '关键词')}</h3>
                 <div class="book-detail-tags">${tags.map(tag => `<span class="book-detail-tag">${escapeHtml(tag)}</span>`).join('')}</div>
             </div>` : ''}
             ${renderRelatedBooksSection(book)}
             <div class="book-detail-section" data-section="book-reviews">
-                <h3>用户评价</h3>
+                <h3>${t('book-detail-section-reviews', '用户评价')}</h3>
                 <div data-role="book-review-content"></div>
             </div>
         `;
@@ -5020,7 +5149,7 @@ window.onLanguageChanged = function(lang) {
                 currentPhotoIndex = (nextIndex + photoUrls.length) % photoUrls.length;
                 if (coverImage) {
                     coverImage.src = photoUrls[currentPhotoIndex];
-                    coverImage.alt = `${book.title || '图书'} 图片 ${currentPhotoIndex + 1}`;
+                    coverImage.alt = `${displayTitle || t('book-title-default', '图书')} 图片 ${currentPhotoIndex + 1}`;
                 }
                 thumbButtons.forEach((btn, index) => {
                     btn.classList.toggle('active', index === currentPhotoIndex);

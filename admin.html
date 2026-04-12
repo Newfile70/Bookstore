@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>懒得起名小书铺 - 管理门户</title>
+    <title data-i18n="admin-page-title">懒得起名小书铺 - 管理门户</title>
     <link rel="stylesheet" href="style.css?v=20260401-4">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Noto+Serif+SC:wght@300;400;700&display=swap" rel="stylesheet">
@@ -14,13 +14,14 @@
         <div class="container">
             <nav class="navbar">
                 <div class="logo">
-                    <h1><i class="fas fa-book-open"></i> 懒得起名小书铺 - 管理</h1>
+                    <h1><i class="fas fa-book-open"></i> <span data-i18n="admin-logo">懒得起名小书铺 - 管理</span></h1>
                 </div>
                 <div class="nav-links">
-                    <a href="#products" class="nav-link active"><i class="fas fa-book"></i> 产品管理</a>
-                    <a href="#orders" class="nav-link"><i class="fas fa-shopping-cart"></i> 订单管理</a>
-                    <a href="#moderation" class="nav-link"><i class="fas fa-shield-alt"></i> 内容审核</a>
-                    <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> 退出</a>
+                    <a href="#products" class="nav-link active"><i class="fas fa-book"></i> <span data-i18n="admin-nav-products">产品管理</span></a>
+                    <a href="#orders" class="nav-link"><i class="fas fa-shopping-cart"></i> <span data-i18n="admin-nav-orders">订单管理</span></a>
+                    <a href="#moderation" class="nav-link"><i class="fas fa-shield-alt"></i> <span data-i18n="admin-nav-moderation">内容审核</span></a>
+                    <a href="#" id="lang-toggle-btn" class="nav-link" style="font-weight: bold; color: var(--accent-color);">EN</a>
+                    <a href="index.html" id="logout-btn"><i class="fas fa-sign-out-alt"></i> <span data-i18n="admin-nav-logout">退出</span></a>
                 </div>
             </nav>
         </div>
@@ -29,10 +30,10 @@
     <!-- 产品管理区 (A14-A18, C5) -->
     <section class="admin-section" id="products">
         <div class="container">
-            <h2>产品管理</h2>
-            <button id="add-product-btn" class="btn btn-primary">添加产品</button>
+            <h2 data-i18n="admin-products-title">产品管理</h2>
+            <button id="add-product-btn" class="btn btn-primary" data-i18n="admin-add-product-btn">添加产品</button>
             <div class="admin-search-bar">
-                <input type="text" id="admin-search-input" placeholder="搜索产品ID、名称...">
+                <input type="text" id="admin-search-input" placeholder="搜索产品ID、名称..." data-i18n-placeholder="admin-search-placeholder">
                 <button id="admin-search-btn"><i class="fas fa-search"></i></button>
             </div>
 <div class="products-grid" id="admin-products-grid"></div>
@@ -43,7 +44,7 @@
     <!-- 订单管理区 (A19-A20, B2-B4) -->
     <section class="admin-section" id="orders">
         <div class="container">
-            <h2>订单管理</h2>
+            <h2 data-i18n="admin-orders-title">订单管理</h2>
 <div class="orders-list" id="admin-orders-list"></div>
 <div id="orders-pagination" class="pagination" style="margin-top: 20px;"></div>
         </div>
@@ -51,7 +52,7 @@
 
     <section class="admin-section" id="moderation">
         <div class="container">
-            <h2>内容审核</h2>
+            <h2 data-i18n="admin-moderation-title">内容审核</h2>
             <div id="admin-moderation-panel"></div>
         </div>
     </section>
@@ -73,6 +74,7 @@
         </div>
     </div>
 
+    <script src="i18n.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
     <script src="admin-script.js?v=20260401-4"></script> 
 </body>
