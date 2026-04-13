@@ -242,6 +242,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         return isEnglishContentMode() ? (en.length ? en : zh) : (zh.length ? zh : en);
     }
 
+    function getOrderItemDisplayTitle(item) {
+        const sourceBook = Number.isFinite(Number(item?.bookId))
+            ? findBookById(item.bookId, { includeDisabled: true })
+            : null;
+        if (sourceBook) return getBookDisplayTitle(sourceBook);
+
+        const zh = String(item?.title || '').trim();
+        const en = String(item?.titleEn ?? item?.title_en ?? '').trim();
+        return isEnglishContentMode()
+            ? (en || zh || t('book-title-default', '图书'))
+            : (zh || en || t('book-title-default', '图书'));
+    }
+
     function normalizeOrderItem(rawItem) {
         const parsedBookId = Number(rawItem?.bookId ?? rawItem?.book_id ?? rawItem?.id);
         const bookId = Number.isFinite(parsedBookId) ? parsedBookId : null;
@@ -252,6 +265,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         return {
             bookId,
             title: String(rawItem?.title || fallbackBook?.title || '图书'),
+            titleEn: String(rawItem?.titleEn ?? rawItem?.title_en ?? fallbackBook?.titleEn ?? fallbackBook?.title_en ?? ''),
             quantity,
             price,
             subtotal: Number.isFinite(subtotal) ? subtotal : 0
@@ -2406,7 +2420,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         cartItemsContainer.innerHTML = '';
         
         if (cart.length === 0) {
-            cartItemsContainer.innerHTML = '<div class="empty-cart"><p>购物车为空</p></div>';
+            cartItemsContainer.innerHTML = `<div class="empty-cart"><p>${t('cart-empty', '购物车为空')}</p></div>`;
             return;
         }
         
@@ -2422,13 +2436,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             cartItem.dataset.id = item.id;
             
             cartItem.innerHTML = `
-                <div class="cart-item-image cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" aria-label="查看《${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}》详情" style="${getBookBrowseCoverStyle(book)}">
+                <div class="cart-item-image cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" aria-label="${(t('cart-open-detail-aria-template', '查看《{title}》详情') || '查看《{title}》详情').replace('{title}', escapeHtml(displayTitle || t('book-title-untitled', '未命名图书')))}" style="${getBookBrowseCoverStyle(book)}">
                     ${coverUrl ? '' : `<span style="color: white; font-size: 12px; padding: 5px;">${escapeHtml((displayTitle || t('book-title-default', '图书')).substring(0, 6))}...</span>`}
                 </div>
                 <div class="cart-item-details">
                     <h4 class="cart-item-title cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h4>
                     <p class="cart-item-author cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
-                    <div class="cart-item-meta cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" style="font-size:12px;color:var(--text-light);margin-bottom:8px;">点击查看详情</div>
+                    <div class="cart-item-meta cart-open-detail" data-book-id="${book.id}" role="button" tabindex="0" style="font-size:12px;color:var(--text-light);margin-bottom:8px;">${t('cart-click-detail', '点击查看详情')}</div>
                     <div class="cart-item-controls">
                         <div class="cart-item-quantity">
                             <button class="quantity-btn decrease-quantity" data-id="${item.id}">-</button>
@@ -2717,7 +2731,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             item.dataset.po = String(order.poNumber || '').trim();
 
             const itemsHtml = (order.items || []).length
-                ? `<ul style="margin:8px 0 0 18px;padding:0;">${order.items.map(product => `<li>${escapeHtml(product.title || '图书')} × ${Number(product.quantity || 0)}</li>`).join('')}</ul>`
+                ? `<ul style="margin:8px 0 0 18px;padding:0;">${order.items.map(product => `<li>${escapeHtml(getOrderItemDisplayTitle(product) || t('book-title-default', '图书'))} × ${Number(product.quantity || 0)}</li>`).join('')}</ul>`
                 : `<div style="margin-top:8px;color:var(--text-light);">${t('order-items-missing', '该订单未记录商品明细')}</div>`;
             const canReceive = normalizeOrderStatus(order.status) === 'arrived';
             const isCancelled = normalizeOrderStatus(order.status) === 'cancelled';
@@ -2811,7 +2825,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         modal.innerHTML = `
             <div class="order-detail-overlay" data-role="close-order-detail"></div>
             <div class="order-detail-panel" role="dialog" aria-modal="true" aria-labelledby="order-detail-title">
-                <button type="button" class="order-detail-close" data-role="close-order-detail" aria-label="关闭订单详情">
+                <button type="button" class="order-detail-close" data-role="close-order-detail" aria-label="${t('order-detail-close-aria', '关闭订单详情')}">
                     <i class="fas fa-times"></i>
                 </button>
                 <div class="order-detail-body"></div>
@@ -2865,21 +2879,21 @@ document.addEventListener('DOMContentLoaded', async function() {
         const moderationStatus = normalizeModerationStatus(review?.moderationStatus);
         const moderationHint = review
             ? (moderationStatus === 'approved'
-                ? '该评价已发布'
+                ? t('order-review-status-approved', '该评价已发布')
                 : moderationStatus === 'pending'
-                    ? '该评价正在人工审核中，审核通过后会公开展示'
+                    ? t('order-review-status-pending', '该评价正在人工审核中，审核通过后会公开展示')
                     : moderationStatus === 'rejected'
-                        ? `该评价未通过审核${review?.moderationReason ? `：${review.moderationReason}` : ''}`
-                        : '该评价当前不可见')
-            : '尚未提交评价';
+                        ? `${t('order-review-status-rejected', '该评价未通过审核')}${review?.moderationReason ? `：${review.moderationReason}` : ''}`
+                        : t('order-review-status-hidden', '该评价当前不可见'))
+            : t('order-review-status-empty', '尚未提交评价');
         const canReviewOrder = normalizeOrderStatus(order?.status) === 'received';
 
         if (!Number.isFinite(bookId)) {
             return `
                 <div class="order-review-card disabled">
                     <div class="order-review-header">
-                        <strong>${escapeHtml(item?.title || '图书')}</strong>
-                        <span class="order-review-hint">该商品缺少 bookId，无法关联评价</span>
+                        <strong>${escapeHtml(getOrderItemDisplayTitle(item) || t('book-title-default', '图书'))}</strong>
+                        <span class="order-review-hint">${t('order-review-missing-bookid', '该商品缺少 bookId，无法关联评价')}</span>
                     </div>
                 </div>
             `;
@@ -2888,24 +2902,24 @@ document.addEventListener('DOMContentLoaded', async function() {
         return `
             <div class="order-review-card ${canReviewOrder ? '' : 'disabled'}" data-order-id="${escapeHtml(order.id)}" data-book-id="${bookId}">
                 <div class="order-review-header">
-                    <strong>${escapeHtml(item?.title || '图书')}</strong>
-                    <span class="order-review-hint">${canReviewOrder ? (review ? '已评价，可修改，可补充图片/视频' : '请为该图书评分，可选文字和图片/视频') : '订单未收货，暂不可评价'}</span>
+                    <strong>${escapeHtml(getOrderItemDisplayTitle(item) || t('book-title-default', '图书'))}</strong>
+                    <span class="order-review-hint">${canReviewOrder ? (review ? t('order-review-hint-reviewed', '已评价，可修改，可补充图片/视频') : t('order-review-hint-prompt', '请为该图书评分，可选文字和图片/视频')) : t('order-review-hint-disabled', '订单未收货，暂不可评价')}</span>
                 </div>
                 <div class="order-review-stars" data-rating="${initialRating}">
                     ${[1, 2, 3, 4, 5].map(score => `<button type="button" class="order-review-star ${score <= initialRating ? 'active' : ''}" data-score="${score}" ${canReviewOrder ? '' : 'disabled'}><i class="fas fa-star"></i></button>`).join('')}
                 </div>
-                <textarea class="order-review-comment" rows="3" maxlength="300" placeholder="可选：写下你的评价（最多 300 字）" ${canReviewOrder ? '' : 'disabled'}>${escapeHtml(initialComment)}</textarea>
+                <textarea class="order-review-comment" rows="3" maxlength="300" placeholder="${t('order-review-comment-placeholder', '可选：写下你的评价（最多 300 字）')}" ${canReviewOrder ? '' : 'disabled'}>${escapeHtml(initialComment)}</textarea>
                 <div class="order-review-media-block">
                     <div class="order-review-media-toolbar">
-                        <button type="button" class="btn btn-outline btn-pick-review-media" ${canReviewOrder ? '' : 'disabled'}><i class="fas fa-photo-film"></i> 选择图片/视频</button>
-                        <button type="button" class="btn btn-outline btn-clear-review-media" ${canReviewOrder && initialMedia.length ? '' : 'disabled'}><i class="fas fa-trash"></i> 清空附件</button>
-                        <span class="order-review-media-status">${initialMedia.length ? `已添加 ${initialMedia.length}/${REVIEW_MEDIA_MAX_FILES} 个附件` : `支持图片/视频上传，最多 ${REVIEW_MEDIA_MAX_FILES} 个附件`}</span>
+                        <button type="button" class="btn btn-outline btn-pick-review-media" ${canReviewOrder ? '' : 'disabled'}><i class="fas fa-photo-film"></i> ${t('order-review-media-pick-btn', '选择图片/视频')}</button>
+                        <button type="button" class="btn btn-outline btn-clear-review-media" ${canReviewOrder && initialMedia.length ? '' : 'disabled'}><i class="fas fa-trash"></i> ${t('order-review-media-clear-btn', '清空附件')}</button>
+                        <span class="order-review-media-status">${initialMedia.length ? t('order-review-media-status-added', '已添加 {count}/{max} 个附件').replace('{count}', String(initialMedia.length)).replace('{max}', String(REVIEW_MEDIA_MAX_FILES)) : t('order-review-media-status-empty', '支持图片/视频上传，最多 {max} 个附件').replace('{max}', String(REVIEW_MEDIA_MAX_FILES))}</span>
                     </div>
                     <input class="order-review-media-input" type="file" accept="image/*,video/*" multiple ${canReviewOrder ? '' : 'disabled'} hidden>
                     <div class="order-review-dropzone ${canReviewOrder ? '' : 'disabled'}" tabindex="0">
                         <i class="fas fa-cloud-upload-alt"></i>
-                        <strong>拖拽图片或视频到这里</strong>
-                        <span>也可点击上方按钮直接选择，无需单独上传到存储桶</span>
+                        <strong>${t('order-review-dropzone-title', '拖拽图片或视频到这里')}</strong>
+                        <span>${t('order-review-dropzone-subtitle', '也可点击上方按钮直接选择，无需单独上传到存储桶')}</span>
                         <small>单张图片不超过 ${formatFileSize(REVIEW_MEDIA_MAX_IMAGE_BYTES)}，单个视频不超过 ${formatFileSize(REVIEW_MEDIA_MAX_VIDEO_BYTES)}</small>
                     </div>
                     <div class="order-review-media-grid">${renderReviewMediaItemsHtml(initialMedia, { removable: canReviewOrder, emptyText: '尚未添加评价图片或视频' })}</div>
@@ -3114,7 +3128,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <div class="order-detail-items">
                         ${items.map(product => `
                             <div class="order-detail-item">
-                                <strong>${escapeHtml(product.title || '图书')}</strong>
+                                <strong>${escapeHtml(getOrderItemDisplayTitle(product) || t('book-title-default', '图书'))}</strong>
                                 <span>数量：${Number(product.quantity || 0)}</span>
                                 <span>单价：¥ ${Number(product.price || 0).toFixed(2)}</span>
                                 <span>小计：¥ ${Number(product.subtotal ?? (Number(product.price || 0) * Number(product.quantity || 0))).toFixed(2)}</span>
@@ -3175,8 +3189,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <p class="cart-item-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
                     <div style="font-size:13px;color:var(--text-light);">${t('history-view-time-label', '浏览时间：')}${escapeHtml(formatOrderDate(entry.viewedAt))}</div>
                     <div class="cart-item-controls">
-                        <button class="btn btn-secondary history-open-btn" data-id="${entry.id}">再次查看</button>
-                        <button class="remove-item remove-history" data-id="${entry.id}" title="移除记录">
+                        <button class="btn btn-secondary history-open-btn" data-id="${entry.id}">${t('history-open-btn', '再次查看')}</button>
+                        <button class="remove-item remove-history" data-id="${entry.id}" title="${t('history-remove-title', '移除记录')}">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -3404,7 +3418,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 persistHistory();
                 renderHistorySidebar();
                 refreshRecommendationsByBehavior({ silent: true });
-                showNotification('浏览历史已清空', 'info');
+                showNotification(t('history-clear-success', '浏览历史已清空'), 'info');
             });
         }
 
@@ -3429,7 +3443,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     }
                 })();
 
-                showNotification('已退出登录，正在返回首页...', 'info');
+                showNotification(t('logout-success-notice', '已退出登录，正在返回首页...'), 'info');
                 // 强制替换到 index.html，避免 file:// 环境出现 HEAD 探测问题或历史回退
                 setTimeout(() => { window.location.replace('./index.html'); }, 250);
             });
@@ -3487,6 +3501,8 @@ if (checkoutBtn) {
 
 // 语言切换回调函数
 window.onLanguageChanged = function(lang) {
+    // 重新渲染购物车，避免切语言后必须手动刷新
+    renderCart();
     // 重新渲染订单侧边栏以更新按钮文本
     renderOrdersSidebar();
     // 重新渲染收藏侧边栏（如果需要）
@@ -4359,17 +4375,40 @@ window.onLanguageChanged = function(lang) {
         };
     }
 
+    function getLocalizedSharedTags(sourceBook, candidateBook, limit = 3) {
+        const maxCount = Math.max(1, Number(limit) || 3);
+        const sourceTagMap = new Map();
+        const candidateTags = getBookDisplayTags(candidateBook);
+
+        getBookDisplayTags(sourceBook).forEach(tag => {
+            const normalized = String(tag || '').trim().toLowerCase();
+            if (!normalized || sourceTagMap.has(normalized)) return;
+            sourceTagMap.set(normalized, String(tag || '').trim());
+        });
+
+        const shared = [];
+        candidateTags.forEach(tag => {
+            const normalized = String(tag || '').trim().toLowerCase();
+            if (!normalized || !sourceTagMap.has(normalized) || shared.includes(sourceTagMap.get(normalized))) return;
+            shared.push(sourceTagMap.get(normalized));
+        });
+
+        return shared.slice(0, maxCount);
+    }
+
     function buildRelatedReason(match, sourceBook, candidateBook) {
-        if (match?.sameAuthor) return '同作者作品';
-        if (Array.isArray(match?.sharedTags) && match.sharedTags.length) {
-            return `共同标签：${match.sharedTags.slice(0, 3).join('、')}`;
+        if (match?.sameAuthor) return t('related-book-reason-same-author', '同作者作品');
+        const sharedTags = getLocalizedSharedTags(sourceBook, candidateBook, 3);
+        if (sharedTags.length) {
+            return t('related-book-reason-shared-tags', '共同标签：{tags}').replace('{tags}', sharedTags.join(isEnglishContentMode() ? ', ' : '、'));
         }
         if (match?.sameCategory) {
-            return `同属“${getCategoryName(candidateBook?.category || sourceBook?.category)}”分类`;
+            return t('related-book-reason-same-category', '同属“{category}”分类')
+                .replace('{category}', getCategoryName(candidateBook?.category || sourceBook?.category));
         }
-        if (match?.samePublisher) return '同出版社相关图书';
-        if (Number(match?.priceClosenessScore) > 0) return '价格区间接近，适合继续比较';
-        return '相关图书推荐';
+        if (match?.samePublisher) return t('related-book-reason-same-publisher', '同出版社相关图书');
+        if (Number(match?.priceClosenessScore) > 0) return t('related-book-reason-close-price', '价格区间接近，适合继续比较');
+        return t('related-book-reason-general', '相关图书推荐');
     }
 
     function scoreRelatedBook(sourceBook, candidateBook) {
@@ -4498,30 +4537,32 @@ window.onLanguageChanged = function(lang) {
         return `
             <div class="book-detail-section related-books-section" data-section="related-books">
                 <div class="related-books-header">
-                    <h3>相关图书</h3>
-                    <p>基于作者、分类与标签为你推荐</p>
+                    <h3>${t('related-books-title', '相关图书')}</h3>
+                    <p>${t('related-books-subtitle', '基于作者、分类与标签为你推荐')}</p>
                 </div>
                 <div class="related-books-grid">
                     ${relatedBooks.map(item => {
                         const relatedBook = item.book;
                         const coverUrl = getBookBrowseCoverUrl(relatedBook);
+                        const displayTitle = getBookDisplayTitle(relatedBook);
+                        const displayAuthor = getBookDisplayAuthor(relatedBook);
                         return `
                             <article class="related-book-card" data-book-id="${escapeHtml(relatedBook.id)}">
                                 <div class="related-book-cover" style="${getBookBrowseCoverStyle(relatedBook)}">
-                                    ${coverUrl ? '' : `<span>${escapeHtml((relatedBook.title || '图书').slice(0, 10))}</span>`}
+                                    ${coverUrl ? '' : `<span>${escapeHtml((displayTitle || t('book-title-default', '图书')).slice(0, 10))}</span>`}
                                 </div>
                                 <div class="related-book-body">
                                     <div class="related-book-category">${escapeHtml(getCategoryName(relatedBook.category))}</div>
-                                    <h4 class="related-book-title">${escapeHtml(relatedBook.title || '未命名图书')}</h4>
-                                    <p class="related-book-author">${escapeHtml(relatedBook.author || '未知作者')}</p>
-                                    <p class="related-book-reason">${escapeHtml(item.reason || '图书属性相近，值得继续浏览')}</p>
+                                    <h4 class="related-book-title">${escapeHtml(displayTitle || t('book-title-untitled', '未命名图书'))}</h4>
+                                    <p class="related-book-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
+                                    <p class="related-book-reason">${escapeHtml(item.reason || t('related-book-reason-default', '图书属性相近，值得继续浏览'))}</p>
                                     <div class="related-book-footer">
                                         <span class="related-book-price">¥ ${Number(relatedBook.price || 0).toFixed(2)}</span>
                                         <div class="related-book-actions">
-                                            <button type="button" class="favorite-btn related-book-favorite ${isFavoriteBook(relatedBook.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(relatedBook.id)}" ${isGuestUser() ? 'disabled' : ''} aria-label="收藏图书">
+                                            <button type="button" class="favorite-btn related-book-favorite ${isFavoriteBook(relatedBook.id) ? 'active' : ''} ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(relatedBook.id)}" ${isGuestUser() ? 'disabled' : ''} aria-label="${t('related-book-favorite-aria', '收藏图书')}">
                                                 <i class="${isFavoriteBook(relatedBook.id) ? 'fas' : 'far'} fa-heart"></i>
                                             </button>
-                                            <button type="button" class="add-to-cart related-book-add-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(relatedBook.id)}" ${isGuestUser() ? 'disabled' : ''} aria-label="加入购物车">
+                                            <button type="button" class="add-to-cart related-book-add-cart ${isGuestUser() ? 'disabled' : ''}" data-id="${escapeHtml(relatedBook.id)}" ${isGuestUser() ? 'disabled' : ''} aria-label="${t('related-book-add-cart-aria', '加入购物车')}">
                                                 <i class="fas fa-cart-plus"></i>
                                             </button>
                                         </div>
@@ -4597,7 +4638,7 @@ window.onLanguageChanged = function(lang) {
         modal.innerHTML = `
             <div class="book-detail-overlay" data-role="close-detail"></div>
             <div class="book-detail-panel" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
-                <button type="button" class="book-detail-close" data-role="close-detail" aria-label="关闭详情页">
+                <button type="button" class="book-detail-close" data-role="close-detail" aria-label="${t('book-detail-close-aria', '关闭详情页')}">
                     <i class="fas fa-times"></i>
                 </button>
                 <div class="book-detail-body"></div>
@@ -4630,17 +4671,17 @@ window.onLanguageChanged = function(lang) {
         modal.innerHTML = `
             <div class="review-media-gallery-overlay" data-role="close-review-media-gallery"></div>
             <div class="review-media-gallery-panel" role="dialog" aria-modal="true" aria-labelledby="review-media-gallery-title">
-                <button type="button" class="review-media-gallery-close" data-role="close-review-media-gallery" aria-label="关闭大图预览">
+                <button type="button" class="review-media-gallery-close" data-role="close-review-media-gallery" aria-label="${t('review-media-gallery-close-aria', '关闭大图预览')}">
                     <i class="fas fa-times"></i>
                 </button>
                 <div class="review-media-gallery-header">
-                    <strong id="review-media-gallery-title">评价附件预览</strong>
+                    <strong id="review-media-gallery-title">${t('review-media-gallery-title', '评价附件预览')}</strong>
                     <span class="review-media-gallery-counter">1 / 1</span>
                 </div>
                 <div class="review-media-gallery-stage-wrap">
-                    <button type="button" class="review-media-gallery-nav prev" aria-label="上一张"><i class="fas fa-chevron-left"></i></button>
+                    <button type="button" class="review-media-gallery-nav prev" aria-label="${t('common-prev', '上一张')}"><i class="fas fa-chevron-left"></i></button>
                     <div class="review-media-gallery-stage"></div>
-                    <button type="button" class="review-media-gallery-nav next" aria-label="下一张"><i class="fas fa-chevron-right"></i></button>
+                    <button type="button" class="review-media-gallery-nav next" aria-label="${t('common-next', '下一张')}"><i class="fas fa-chevron-right"></i></button>
                 </div>
                 <div class="review-media-gallery-thumbs"></div>
             </div>
@@ -4738,7 +4779,7 @@ window.onLanguageChanged = function(lang) {
                     const src = escapeHtml(sanitizeReviewMediaUrl(item?.src));
                     const label = escapeHtml(item?.name || (item?.kind === 'video' ? t('review-video-attachment', '视频附件') : t('review-image-attachment', '图片附件')));
                     return `
-                        <button type="button" class="review-media-gallery-thumb ${index === normalizedIndex ? 'active' : ''}" data-index="${index}" aria-label="查看${label}">
+                        <button type="button" class="review-media-gallery-thumb ${index === normalizedIndex ? 'active' : ''}" data-index="${index}" aria-label="${(t('review-media-open-label-template', '查看{label}') || '查看{label}').replace('{label}', label)}">
                             ${item?.kind === 'video'
                                 ? `<video muted playsinline preload="metadata" src="${src}"></video><span class="review-media-play-badge small"><i class="fas fa-play"></i></span>`
                                 : `<img src="${src}" alt="${label}">`}
