@@ -56,6 +56,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     let recommendationRotationOffset = 0;
     let recommendationFirstBatch = [];
     let detailGalleryAutoplayTimer = null;
+    let activeBookDetailId = null;
     const DETAIL_GALLERY_INTERVAL_MS = 2000;
     const REVIEW_MEDIA_MAX_FILES = 4;
     const REVIEW_MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -1375,7 +1376,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         try {
             const { data, error } = await supabaseClient.auth.getUser();
             if (error) {
-                console.warn('Get Supabase user failed:', error);
+                const message = String(error?.message || '').toLowerCase();
+                const isMissingSession = String(error?.name || '').includes('AuthSessionMissingError') || message.includes('auth session missing');
+                if (!isMissingSession) {
+                    console.warn('Get Supabase user failed:', error);
+                }
                 return null;
             }
             return data?.user?.id || null;
@@ -1500,6 +1505,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     function updateFavoriteButtonVisual(button, active) {
         if (!button) return;
         button.classList.toggle('active', active);
+        const label = active
+            ? t('favorites-btn-active', '取消收藏')
+            : t('favorites-btn-inactive', '收藏');
+        button.setAttribute('title', label);
+        button.setAttribute('aria-label', label);
         const icon = button.querySelector('i');
         if (icon) {
             icon.className = `${active ? 'fas' : 'far'} fa-heart`;
@@ -1532,6 +1542,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         const key = String(bookId);
         const targetBook = books.find(b => String(b.id) === key);
+        const targetTitle = String(getBookDisplayTitle(targetBook) || t('book-title-default', '图书')).slice(0, 18);
         const willFavorite = !favoriteBookIds.has(key);
 
         try {
@@ -1544,7 +1555,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 syncFavoriteButtonsForBook(bookId);
                 renderFavoritesSidebar();
                 refreshRecommendationsByBehavior({ silent: true });
-                showNotification(`已收藏《${(targetBook?.title || '该图书').substring(0, 18)}》`, 'success');
+                showNotification((t('favorites-added-template', '已收藏《{title}》') || '已收藏《{title}》').replace('{title}', targetTitle), 'success');
             } else {
                 const { error } = await supabaseClient
                     .from('favorites')
@@ -1556,7 +1567,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 syncFavoriteButtonsForBook(bookId);
                 renderFavoritesSidebar();
                 refreshRecommendationsByBehavior({ silent: true });
-                showNotification(`已取消收藏《${(targetBook?.title || '该图书').substring(0, 18)}》`, 'info');
+                showNotification((t('favorites-removed-template', '已取消收藏《{title}》') || '已取消收藏《{title}》').replace('{title}', targetTitle), 'info');
             }
         } catch (e) {
             console.error('Toggle favorite failed:', e);
@@ -1934,28 +1945,30 @@ document.addEventListener('DOMContentLoaded', async function() {
     function updateRecommendationRefreshTip() {
         const tip = document.querySelector('.recommendation-refresh p');
         if (!tip) return;
+        const lang = window.currentLang === 'en' ? 'en' : 'zh';
+        const locale = lang === 'en' ? 'en-US' : 'zh-CN';
         if (!recommendationLastUpdatedAt) {
-            tip.textContent = '推荐每10分钟自动更新一次，也可以手动刷新';
+            tip.textContent = t('recommendations-refresh-tip-no-time') || '推荐每10分钟自动更新一次，也可以手动刷新';
             return;
         }
-        const timeText = new Date(recommendationLastUpdatedAt).toLocaleTimeString('zh-CN', {
+        const timeText = new Date(recommendationLastUpdatedAt).toLocaleTimeString(locale, {
             hour12: false,
             hour: '2-digit',
             minute: '2-digit'
         });
-        tip.textContent = `推荐每10分钟自动更新一次，也可以手动刷新（最近更新：${timeText}）`;
+        tip.textContent = (t('recommendations-refresh-tip-with-time') || '推荐每10分钟自动更新一次，也可以手动刷新（最近更新：{time}）').replace('{time}', timeText);
     }
 
     function refreshRecommendationsByBehavior(options = {}) {
         const {
             silent = true,
-            message = '推荐已更新',
+            message = t('recommendations-refresh-success') || '推荐已更新',
             lockButton = false,
             rotateBatch = false
         } = options;
 
         if (lockButton && refreshRecommendationsBtn) {
-            refreshRecommendationsBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中...';
+            refreshRecommendationsBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${t('recommendations-refreshing') || '刷新中...'}`;
             refreshRecommendationsBtn.disabled = true;
         }
 
@@ -1991,7 +2004,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         updateRecommendationRefreshTip();
 
         if (lockButton && refreshRecommendationsBtn) {
-            refreshRecommendationsBtn.innerHTML = '<i class="fas fa-sync-alt"></i> 刷新推荐';
+            refreshRecommendationsBtn.innerHTML = `<i class="fas fa-sync-alt"></i> ${t('recommendations-refresh-btn') || '刷新推荐'}`;
             refreshRecommendationsBtn.disabled = false;
         }
 
@@ -2501,7 +2514,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <p class="cart-item-author">${escapeHtml(displayAuthor || t('book-author-unknown', '未知作者'))}</p>
                     <div class="cart-item-controls">
                         <div class="cart-item-price">¥ ${Number(book.price || 0).toFixed(2)}</div>
-                        <button class="remove-item remove-favorite" data-id="${book.id}" title="取消收藏">
+                        <button class="remove-item remove-favorite" data-id="${book.id}" title="${t('favorites-btn-active', '取消收藏')}">
                             <i class="fas fa-heart-broken"></i>
                         </button>
                     </div>
@@ -3266,7 +3279,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (refreshRecommendationsBtn) refreshRecommendationsBtn.addEventListener('click', function() {
             refreshRecommendationsByBehavior({
                 silent: false,
-                message: '推荐已按当前浏览、收藏和加购偏好更新',
+                message: t('recommendations-refresh-success-detailed') || '推荐已按当前浏览、收藏和加购偏好更新',
                 lockButton: true,
                 rotateBatch: true
             });
@@ -3486,9 +3499,21 @@ window.onLanguageChanged = function(lang) {
     updateUserModeBadge();
     // 同步更新游客态按钮提示文案
     applyGuestUIRestrictions();
+    // 推荐刷新提示文案按语言同步
+    updateRecommendationRefreshTip();
 
     if (Array.isArray(searchFilterState.baseResults) && searchFilterState.baseResults.length && searchFilterState.lastQuery) {
         renderSearchResults(getSearchFilteredBooks(), searchFilterState.lastQuery);
+    } else {
+        renderBooks(books);
+    }
+
+    renderRecommendations();
+
+    const detailModal = document.getElementById('book-detail-modal');
+    const modalBookId = Number(detailModal?.dataset?.bookId || activeBookDetailId || 0);
+    if (detailModal?.classList.contains('active') && modalBookId) {
+        openBookDetail(modalBookId, { skipHistory: true });
     }
 };
     }
@@ -5010,18 +5035,23 @@ window.onLanguageChanged = function(lang) {
         });
     }
 
-    function openBookDetail(bookId) {
+    function openBookDetail(bookId, options = {}) {
+        const { skipHistory = false } = options;
         const book = findBookById(bookId);
         if (!book) {
             showNotification('未找到该图书详情', 'info');
             return;
         }
 
-        recordBrowsingHistory(book);
+        if (!skipHistory) {
+            recordBrowsingHistory(book);
+        }
 
         stopDetailGalleryAutoplay();
 
         const modal = ensureBookDetailModal();
+        activeBookDetailId = Number(book.id) || null;
+        modal.dataset.bookId = String(activeBookDetailId || '');
         const body = modal.querySelector('.book-detail-body');
         if (!body) return;
 
@@ -5190,6 +5220,8 @@ window.onLanguageChanged = function(lang) {
         if (!modal) return;
         stopDetailGalleryAutoplay();
         modal.classList.remove('active');
+        activeBookDetailId = null;
+        delete modal.dataset.bookId;
         syncDetailOpenState();
     }
 
