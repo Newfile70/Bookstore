@@ -176,6 +176,7 @@
         const SUPABASE_URL = 'https://cxsomlfxlpnqnqramoyf.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_iCCcnej8rT1qLIXHpsH9HA_B6LeiYFe';
         const CHECKOUT_PAYLOAD_KEY = 'bookstore_checkout_payload_v1';
+        const RECOMMENDATION_META_PREFIX = 'bookstore_recommendation_meta_v1';
         const client = (typeof supabase !== 'undefined' && supabase?.createClient)
             ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
             : null;
@@ -256,6 +257,47 @@
                 sessionStorage.removeItem(CHECKOUT_PAYLOAD_KEY);
             } catch (e) {
                 console.warn('Clear cart after success failed:', e);
+            }
+        }
+
+        function hashRecommendationSeed(input) {
+            let hash = 2166136261;
+            const source = String(input || '');
+            for (let index = 0; index < source.length; index += 1) {
+                hash ^= source.charCodeAt(index);
+                hash = Math.imul(hash, 16777619);
+            }
+            return (hash >>> 0).toString(36);
+        }
+
+        function getRecommendationProfileIdentity(userId = null) {
+            const loginUsername = String(sessionStorage.getItem('loginUsername') || sessionStorage.getItem('username') || '').trim().toLowerCase();
+            if (userId) return `user:${userId}`;
+            if (loginUsername) return `${sessionStorage.getItem('userType') || 'user'}:${loginUsername}`;
+            return `${sessionStorage.getItem('userType') || 'anon'}:visitor`;
+        }
+
+        function markRecommendationDirtyAfterPurchase(reason = 'purchase_update', userId = null) {
+            try {
+                const storageKey = `${RECOMMENDATION_META_PREFIX}_${hashRecommendationSeed(getRecommendationProfileIdentity(userId))}`;
+                const raw = safeParseJson(localStorage.getItem(storageKey), null);
+                const meta = raw && typeof raw === 'object' ? raw : {};
+                const normalizedReason = String(reason || '').trim();
+                const dirtyReasons = Array.from(new Set([
+                    ...(Array.isArray(meta?.dirtyReasons) ? meta.dirtyReasons : []).map(item => String(item || '').trim()).filter(Boolean),
+                    ...(normalizedReason ? [normalizedReason] : [])
+                ]));
+                localStorage.setItem(storageKey, JSON.stringify({
+                    dirty: true,
+                    dirtyReasons,
+                    dirtyHintShown: false,
+                    lastSuccessfulRefreshAt: String(meta?.lastSuccessfulRefreshAt || '').trim(),
+                    lastAttemptAt: String(meta?.lastAttemptAt || '').trim(),
+                    lastProfileHash: String(meta?.lastProfileHash || '').trim(),
+                    lastServedSource: String(meta?.lastServedSource || 'idle').trim() || 'idle'
+                }));
+            } catch (e) {
+                console.warn('Persist recommendation dirty state failed:', e);
             }
         }
 
@@ -723,6 +765,7 @@
             }
 
             clearCartAfterSuccess(checkoutPayload.cartStorageKey);
+            markRecommendationDirtyAfterPurchase('purchase_update', userId);
             window.location.href = `success.html?total=${checkoutPayload.totalAmount.toFixed(2)}&po=${encodeURIComponent(poNumber)}`;
         });
     </script>
