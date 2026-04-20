@@ -19,8 +19,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     const SYSTEM_MESSAGE_READ_STORAGE_PREFIX = 'bookstore_system_message_read_v1';
     const BOOKS_CACHE_KEY = 'bookstore_books_cache_v2';
     const ORDER_AUTO_RECEIVE_MS = 7 * 24 * 60 * 60 * 1000;
-    const RECOMMENDATION_CACHE_PREFIX = 'bookstore_recommendation_cache_v1';
-    const RECOMMENDATION_SERVED_CACHE_PREFIX = 'bookstore_recommendation_served_v1';
+    const RECOMMENDATION_CACHE_PREFIX = 'bookstore_recommendation_cache_v2';
+    const RECOMMENDATION_SERVED_CACHE_PREFIX = 'bookstore_recommendation_served_v2';
     const RECOMMENDATION_META_PREFIX = 'bookstore_recommendation_meta_v1';
     const RECOMMENDATION_CACHE_TTL_MS = 10 * 60 * 1000;
     const RECOMMENDATION_SERVED_TTL_MS = 10 * 60 * 1000;
@@ -2094,6 +2094,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
     }
 
+    function normalizeRecommendationDisplayText(value) {
+        return String(value || '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
     function normalizePreferenceKey(value) {
         return String(value || '').trim().toLowerCase();
     }
@@ -2172,7 +2179,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         return (Array.isArray(value) ? value : []).map((item, index) => {
             const bookId = normalizeBookIdValue(item?.bookId ?? item?.book_id);
             const key = String(bookId || '');
-            const reason = normalizeRecommendationText(item?.reason, 60) || getRecommendationText('fallback_reason_default', {}, safeLang);
+            const reason = normalizeRecommendationDisplayText(item?.reason) || getRecommendationText('fallback_reason_default', {}, safeLang);
             if (!key || seen.has(key) || !findBookById(bookId)) return null;
             seen.add(key);
             return {
@@ -3323,7 +3330,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             },
             body: JSON.stringify(buildRecommendationRequestPayload(profile, candidates, options)),
             signal: options?.signal
-        }, 15000);
+        }, 32000);
 
         const rawText = await response.text();
         let parsed;
@@ -3347,7 +3354,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         return (Array.isArray(items) ? items : []).map(item => {
             const bookId = normalizeBookIdValue(item?.book_id ?? item?.bookId);
             const key = String(bookId || '');
-            const reason = normalizeRecommendationText(item?.reason, 60);
+            const reason = normalizeRecommendationDisplayText(item?.reason);
             if (!key || !candidateMap.has(key) || seen.has(key) || !reason || !findBookById(bookId)) return null;
             seen.add(key);
             return {
@@ -3362,9 +3369,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         return {
             ok: items.length > 0,
             items,
-            profileSummary: normalizeRecommendationText(
+            profileSummary: normalizeRecommendationDisplayText(
                 raw?.profile_summary || raw?.profileSummary || raw?.summary || raw?.result?.profile_summary || raw?.result?.profileSummary,
-                120
             ),
             source: String(raw?.source || raw?.meta?.source || 'llm').trim() || 'llm',
             meta: {
@@ -3381,7 +3387,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         return (Array.isArray(items) ? items : []).map((item, index) => ({
             id: index + 1,
             bookId: Number(item?.book_id),
-            reason: normalizeRecommendationText(item?.reason, 60) || getRecommendationText('fallback_reason_default', {}, lang)
+            reason: normalizeRecommendationDisplayText(item?.reason) || getRecommendationText('fallback_reason_default', {}, lang)
         })).filter(item => Number.isFinite(item.bookId));
     }
 
@@ -3984,8 +3990,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             recommendationCard.dataset.id = book.id;
             
             recommendationCard.innerHTML = `
-                <div class="recommendation-badge">${escapeHtml(getRecommendationText('badge'))}</div>
-                <p class="recommendation-reason"><i class="fas fa-lightbulb"></i> ${escapeHtml(rec.reason || '')}</p>
+                <div class="recommendation-header">
+                    <p class="recommendation-reason"><i class="fas fa-lightbulb"></i> ${escapeHtml(rec.reason || '')}</p>
+                    <div class="recommendation-badge">${escapeHtml(getRecommendationText('badge'))}</div>
+                </div>
                 <div class="book-category">${getCategoryName(book.category)}</div>
                 <h3 class="book-title">${escapeHtml(displayTitle)}</h3>
                 <p class="book-author">${escapeHtml(displayAuthor)}</p>

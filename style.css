@@ -940,7 +940,7 @@ p { color: var(--text-light); }
 .recommendation-card {
     background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
     border-radius: var(--border-radius);
-    padding: 25px;
+    padding: 30px;
     box-shadow: var(--shadow);
     transition: var(--transition);
     position: relative;
@@ -952,22 +952,32 @@ p { color: var(--text-light); }
     box-shadow: var(--shadow-hover);
 }
 
+.recommendation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
 .recommendation-badge {
-    position: absolute;
-    top: 15px;
-    right: 15px;
     background-color: var(--accent-color);
     color: white;
     font-size: 12px;
     padding: 4px 10px;
     border-radius: 30px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    align-self: flex-start;
 }
 
 .recommendation-reason {
     font-size: 14px;
     color: var(--primary-color);
-    margin-bottom: 10px;
     font-weight: 500;
+    margin: 0;
+    flex: 1;
+    min-width: 0;
 }
 
 .recommendation-refresh {
