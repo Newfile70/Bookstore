@@ -702,6 +702,63 @@ function renderProductsPagination() {
         const normalizedReason = String(reason || '').trim();
         const resultMessage = normalizedReason || (decision === 'hide' ? '举报成立，评论已隐藏' : '举报不成立，管理员驳回');
 
+        if (decision === 'hide') {
+            const reviewId = String(targetReport.review_id || '').trim();
+            if (!reviewId) {
+                alert('隐藏评论失败：未找到关联的评论ID');
+                return;
+            }
+
+            const { count: affectedCount, error: hideReviewError } = await client
+                .from('book_reviews')
+                .update(
+                    {
+                        moderation_status: 'hidden',
+                        moderation_reason: resultMessage,
+                        moderated_at: new Date().toISOString(),
+                        moderated_by: String(sessionStorage.getItem('username') || sessionStorage.getItem('loginUsername') || 'merchant').trim()
+                    },
+                    { count: 'exact' }
+                )
+                .eq('id', reviewId);
+
+            if (hideReviewError) {
+                alert(`隐藏评论失败：${hideReviewError.message || '未知错误'}`);
+                return;
+            }
+
+            if (typeof affectedCount === 'number' && affectedCount <= 0) {
+                const { data: reviewProbe, error: probeError } = await client
+                    .from('book_reviews')
+                    .select('id, moderation_status')
+                    .eq('id', reviewId)
+                    .limit(1)
+                    .maybeSingle();
+
+                if (probeError) {
+                    const probeMessage = String(probeError?.message || '').toLowerCase();
+                    if (probeMessage.includes('row-level security') || probeMessage.includes('permission denied')) {
+                        alert('隐藏评论失败：当前账号没有更新该评论的权限（book_reviews 的 RLS/UPDATE 策略未放行）');
+                    } else {
+                        alert(`隐藏评论失败：${probeError.message || '未知错误'}`);
+                    }
+                    return;
+                }
+
+                if (!reviewProbe) {
+                    alert('隐藏评论失败：举报关联的评论ID不存在（可能是历史脏数据或评论已被删除）');
+                    return;
+                }
+
+                if (String(reviewProbe.moderation_status || '').trim().toLowerCase() === 'hidden') {
+                    // 评论已是隐藏状态，允许继续把举报单标记为已处理，避免阻塞审核流。
+                } else {
+                    alert('隐藏评论失败：找到了评论，但未被成功更新为隐藏状态（请检查 book_reviews 的 UPDATE 权限策略）');
+                    return;
+                }
+            }
+        }
+
         const { error: updateReportError } = await client
             .from('review_reports')
             .update({
@@ -715,23 +772,6 @@ function renderProductsPagination() {
         if (updateReportError) {
             alert(`处理举报失败：${updateReportError.message || '未知错误'}`);
             return;
-        }
-
-        if (decision === 'hide') {
-            const { error: hideReviewError } = await client
-                .from('book_reviews')
-                .update({
-                    moderation_status: 'hidden',
-                    moderation_reason: resultMessage,
-                    moderated_at: new Date().toISOString(),
-                    moderated_by: String(sessionStorage.getItem('username') || sessionStorage.getItem('loginUsername') || 'merchant').trim()
-                })
-                .eq('id', targetReport.review_id);
-
-            if (hideReviewError) {
-                alert(`隐藏评论失败：${hideReviewError.message || '未知错误'}`);
-                return;
-            }
         }
 
         const reporterUserId = String(targetReport?.reporter_user_id || '').trim();
